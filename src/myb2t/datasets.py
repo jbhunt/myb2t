@@ -1,5 +1,3 @@
-import datasets
-import string
 import numpy as np
 from collections import Counter
 import pathlib as pl
@@ -33,7 +31,7 @@ class BrainToText2025(Dataset):
     
         return
     
-    def load(self, n_sessions=None, padding_value=0):
+    def load(self, p_skip=0, padding_value=0):
         """
         """
 
@@ -57,9 +55,7 @@ class BrainToText2025(Dataset):
 
         #
         target_files = list()
-        for session_index, folder in enumerate(pl.Path(self.root).iterdir()):
-            if n_sessions is not None and session_index + 1 > n_sessions:
-                break
+        for folder in pl.Path(self.root).iterdir():
             for file in folder.iterdir():
 
                 #
@@ -84,6 +80,16 @@ class BrainToText2025(Dataset):
             X, y_1, y_2, seq_lens = list(), list(), list(), list()
             with h5py.File(file, 'r') as stream:
                 for trial_key in stream.keys():
+
+                    #
+                    if p_skip == 0 or p_skip is None:
+                        skip = False
+                    elif p_skip == 1:
+                        skip = True
+                    else:
+                        skip = bool(np.random.choice([0, 1], p=[1 - p_skip, p_skip]).item())
+                    if skip:
+                        continue
 
                     #
                     xi = np.array(
@@ -125,6 +131,8 @@ class BrainToText2025(Dataset):
 
             #
             X = np.array(X)
+            if X.size == 0:
+                continue
             n_trials, _, _ = X.shape
             mean = np.nanmean(X, axis=(0, 1))
             std = np.nanstd(X, axis=(0, 1))

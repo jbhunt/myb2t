@@ -7,7 +7,6 @@ from torch.optim import Adam
 import numpy as np
 from myb2t.vocab import PhonemeVocabulary, CharacterVocabulary
 from myb2t.helpers import *
-import pickle
 import pathlib as pl
 import copy
 from jiwer import wer
@@ -247,7 +246,6 @@ class BrainToTextDecoder():
             n_encoder_layers=config["n_encoder_layers"],
             n_decoder_layers=config["n_decoder_layers"],
             n_heads=config["n_attn_heads"],
-            max_tgt_seq_len=config["max_tgt_seq_len"],
             dropout=config["dropout"],
             phoneme_vocab_size=self.v_pho.size,
             character_vocab_size=self.v_chr.size,
