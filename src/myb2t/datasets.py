@@ -9,14 +9,13 @@ class BrainToText2025(Dataset):
     """
     """
 
-    def __init__(self, root=None, T=int(0.02 * 1000 * 1), mode="power", split="train", norm=False):
+    def __init__(self, root=None, T=int(0.02 * 1000 * 1), split="train", norm=False):
         """
         """
 
         super().__init__()
         self.root = root
         self.T = T
-        self.mode = mode
         self.split = split
         self.norm = norm
         self._z = None
@@ -44,14 +43,6 @@ class BrainToText2025(Dataset):
         self._z = list()
         self._seq_lens = list()
         self._trial_indices = list()
-
-        #
-        if self.mode == "spikes":
-            start_index = 0
-            stop_index = 256
-        elif self.mode == "power":
-            start_index = 256
-            stop_index = None
 
         #
         target_files = list()
@@ -92,14 +83,19 @@ class BrainToText2025(Dataset):
                         continue
 
                     #
-                    xi = np.array(
-                        stream[trial_key]["input_features"][:self.T, start_index: stop_index],
+                    xi_spikes = np.array(
+                        stream[trial_key]["input_features"][:self.T, 0: 256],
                         dtype=np.float32
                     )  # T time bins x N channels
-                    seq_len_1, n_features = xi.shape
+                    xi_lfp = np.array(
+                        stream[trial_key]["input_features"][:self.T, 256:],
+                        dtype=np.float32
+                    )
+                    xi = np.dstack([xi_spikes, xi_lfp])
+                    seq_len_1, n_features, n_modes = xi.shape
                     if seq_len_1 < self.T:
                         n_elements = self.T - seq_len_1
-                        padding = np.full([n_elements, n_features], padding_value, dtype=np.float32)
+                        padding = np.full([n_elements, n_features, 2], padding_value, dtype=np.float32)
                         xi = np.vstack([xi, padding])
                     X.append(xi)
 
@@ -133,11 +129,11 @@ class BrainToText2025(Dataset):
             X = np.array(X)
             if X.size == 0:
                 continue
-            n_trials, _, _ = X.shape
+            n_trials, T, n_features, n_modes = X.shape
             mean = np.nanmean(X, axis=(0, 1))
-            std = np.nanstd(X, axis=(0, 1))
-            if self.norm:
-                X = (X - mean) / std
+            # std = np.nanstd(X, axis=(0, 1))
+            # if self.norm:
+            #     X = (X - mean) / std
             z = np.tile(mean, n_trials).reshape(n_trials, -1).astype(np.float32)
 
             #

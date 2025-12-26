@@ -23,21 +23,21 @@ def compute_class_weights(ds, vocab, device):
     weights = weights / weights.mean()
     return weights.to(device)
 
-def make_key_padding_mask(batch, seq_lens, device=None):
+def make_key_padding_mask_from_lens(seq_lens, T, device=None):
     """
+    seq_lens: [B] (int)
+    T: int
+    returns mask: [B, T] bool (True = pad)
     """
+    if seq_lens.dim() != 1:
+        seq_lens = seq_lens.view(-1)
 
-    B, T, N = batch.size()
-    mask = torch.full([B, T], True, dtype=torch.bool)
-    for i_x, x in enumerate(batch):
-        seq_len = int(seq_lens[i_x])
-        mask[i_x, :seq_len] = False
+    dev = device if device is not None else seq_lens.device
+    seq_lens = seq_lens.to(device=dev)
 
-    #
-    if device is not None:
-        mask = mask.to(device=device)
-
-    return mask
+    B = seq_lens.size(0)
+    t = torch.arange(T, device=dev).unsqueeze(0).expand(B, T)
+    return t >= seq_lens.unsqueeze(1)
 
 def make_causal_mask(batch, device=None):
     """
@@ -103,13 +103,18 @@ def make_default_config():
         "lr": 0.00005,
         "max_tgt_seq_len": 128,
         "dropout": 0.15,
-        "alpha": 0.7,
+        "alpha_mtl": 0.7,
         "corruption": 0.15,
         "max_iter": 300,
         "early_stopping": True,
         "tolerance": 10,
         "validation_fraction": 0.1,
         "batch_size": 16,
+        "use_lm": True,
+        "lm_name": "gpt2",
+        "beam_size": 5,
+        "alpha_model": 1.0,
+        "beta_lm": 0.3
     }
 
     return config

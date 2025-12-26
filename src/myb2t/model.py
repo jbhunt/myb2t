@@ -11,6 +11,7 @@ import pathlib as pl
 import copy
 from jiwer import wer
 import pandas as pd
+from transformers import GPT2Tokenizer, GPT2LMHeadModel
 
 # Constants
 FLOAT_DTYPE = torch.float32
@@ -47,43 +48,100 @@ class PositionalEncoding(nn.Module):
         if self.dropout is not None:
             X_encoded = self.dropout(X_encoded)
         return X_encoded
-    
-class SessionEncoding(nn.Module):
+
+class Frontend(nn.Module):
     """
-    Frontend module that handles session encoding
+    Frontend module
     """
 
     def __init__(
         self,
-        d_session,
-        n_channels,
-        d_model,
-        dropout=0.1
+        d_session=16,
+        d_model=128,
+        dropout=0.1,
+        gate_hidden=128,
         ):
         """
         """
 
-        #
         super().__init__()
 
-        self.encoder = nn.Linear(n_channels, d_session, dtype=FLOAT_DTYPE)
-        self.head = nn.Linear(n_channels + d_session, d_model)
+        # Model width
+        self.d_model = d_model
+
+        # Project each modality to model space
+        self.proj_spikes = nn.Linear(256, d_model, dtype=FLOAT_DTYPE)
+        self.proj_lfp = nn.Linear(256, d_model, dtype=FLOAT_DTYPE)
+
+        # Gate
+        self.gate_norm = nn.LayerNorm(2 * d_model)
+        self.gate = nn.Sequential(
+            nn.Linear(2 * d_model, gate_hidden, dtype=FLOAT_DTYPE),
+            nn.GELU(),
+            nn.Linear(gate_hidden, 1, dtype=FLOAT_DTYPE),
+        )
+
+        # Session embedding
+        self.session_embedding = nn.Linear(512, d_session, dtype=FLOAT_DTYPE)
+
+        # Map session embedding into FiLM parameters for d_model
+        self.to_gamma = nn.Linear(d_session, d_model, dtype=FLOAT_DTYPE)
+        self.to_beta  = nn.Linear(d_session, d_model, dtype=FLOAT_DTYPE)
+        nn.init.zeros_(self.to_gamma.weight)
+        nn.init.zeros_(self.to_gamma.bias)
+        nn.init.zeros_(self.to_beta.weight)
+        nn.init.zeros_(self.to_beta.bias)
+
+        #
+        self.positional_encoding = PositionalEncoding(
+            d_model
+        )
+
+        #
         self.dropout = nn.Dropout(dropout)
+        self.norm = nn.LayerNorm(d_model)
 
         return
-    
-    def forward(self, X, z):
+
+    def forward(self, X, z, return_gate=False):
         """
         """
 
-        B, T, N = X.size()
-        z_encoded = self.encoder(z).unsqueeze(1).expand(-1, T, -1)
-        X_augmented = torch.cat([X, z_encoded], dim=-1) # B x T x (N + d_session)
-        X_encoded = self.head(X_augmented)
-        X_encoded = self.dropout(X_encoded)
+        # Split modalities
+        X_spikes = X[:, :, :, 1]                        # [B, T, 256]
+        X_lfp = X[:, :, :, 0]                           # [B, T, 256]
 
-        return X_encoded
-    
+        # Project modalities
+        x_spikes = self.proj_spikes(X_spikes)           # [B, T, d_model]
+        x_lfp = self.proj_lfp(X_lfp)                    # [B, T, d_model]
+
+        # Gate
+        gate_in = torch.cat([x_spikes, x_lfp], dim=-1)  # [B, T, 2 * d_model]
+        gate_in_normed = self.gate_norm(gate_in)        # [B, T, 2 * d_model]
+        g = torch.sigmoid(self.gate(gate_in_normed))    # [B, T, 1]
+
+        # Fuse
+        x = g * x_spikes + (1.0 - g) * x_lfp            # [B, T, d_model]
+
+        # Session encode
+        s = self.session_embedding(z)                   # [B, d_session]
+
+        # FiLM
+        gamma = self.to_gamma(s).unsqueeze(1)           # [B, 1, d_model]
+        beta = self.to_beta(s).unsqueeze(1)             # [B, 1, d_model]
+        x = x * (1.0 + gamma) + beta
+
+        # Positional encoding
+        x = self.positional_encoding(x)
+
+        # Normalize and dropout
+        x = self.norm(x)
+        x = self.dropout(x)
+
+        if return_gate:
+            return x, g
+        return x
+
 class BrainToCharacterTransformer(nn.Module):
     """
     """
@@ -96,7 +154,6 @@ class BrainToCharacterTransformer(nn.Module):
         d_model=128,
         dim_ff=1024,
         dropout=0.1,
-        n_channels=256,
         n_heads=8,
         n_encoder_layers=6,
         n_decoder_layers=3,
@@ -108,9 +165,8 @@ class BrainToCharacterTransformer(nn.Module):
         super().__init__()
 
         #
-        self.session_encoder = SessionEncoding(
+        self.frontend = Frontend(
             d_session,
-            n_channels,
             d_model,
             dropout=dropout
         )
@@ -164,11 +220,6 @@ class BrainToCharacterTransformer(nn.Module):
 
     def forward(self, X, y_pho_seq, y_chr_seq, z, seq_lens, chr_pad_token=0):
         """
-        X:          [B, T_enc, n_channels]
-        y_pho_seq:  [B, T_pho_max]   (padded with PAD)
-        y_chr_seq:  [B, T_chr]       (already shifted input)
-        z:          session info
-        seq_lens:   [B, 3] -> [enc_len, pho_len, chr_len]
         """
 
         # Check data types
@@ -181,11 +232,16 @@ class BrainToCharacterTransformer(nn.Module):
         seq_lens = seq_lens.to(dtype=INTEGER_DTYPE)
 
         # Build key padding masks using sequence lengths
-        memory_key_padding_mask = make_key_padding_mask(X, seq_lens=seq_lens[:, 0], device=device)
+        B, T_enc = X.shape[0], X.shape[1]
+        memory_key_padding_mask = make_key_padding_mask_from_lens(
+            seq_lens[:, 0],
+            T_enc,
+            device=device
+        )
         tgt_key_padding_mask = (y_chr_seq == chr_pad_token)
 
         # Encoder input
-        enc_in = self.session_encoder(X, z)
+        enc_in = self.frontend(X, z)
         enc_in = self.encoder_input_dropout(enc_in)
         memory = self.neural_activity_encoder(
             enc_in,
@@ -271,7 +327,153 @@ class BrainToTextDecoder():
         if snapshot is not None:
             self.load(snapshot)
 
+        #
+        self.lm = None
+        if self.config.get("use_lm"):
+            self._init_lm()
+
         return
+    
+    def _init_lm(self):
+        """
+        Initialize the lange model (optional)
+        """
+
+        lm_name = self.config.get("lm_name", "gpt2")
+        self.lm_tokenizer = GPT2Tokenizer.from_pretrained(lm_name)
+        self.lm = GPT2LMHeadModel.from_pretrained(lm_name)
+        self.lm.to(self.device)
+        self.lm.eval()
+        for p in self.lm.parameters():
+            p.requires_grad = False
+
+        return
+
+    def _decode_char_sequence(self, token_seq_1d):
+        """
+        Translate tokens into characters
+        """
+
+        special_tokens = [self.v_chr.BOS, self.v_chr.EOS, self.v_chr.PAD]
+        if torch.is_tensor(token_seq_1d):
+            token_seq_1d = token_seq_1d.cpu().numpy()
+        token_seq = np.array(token_seq_1d)
+
+        mask = ~np.isin(token_seq, special_tokens)
+        filtered = token_seq[mask]
+
+        chars = self.v_chr.decode(filtered)
+        sentence = "".join(chars)
+
+        return sentence
+    
+    def _score_with_lm(self, sentence):
+        """
+        Returns a scalar log-probability score using a language model
+        """
+
+        if self.config.get("use_lm") == False:
+            return 0.0
+
+        # Encode sentence
+        input_ids = self.lm_tokenizer.encode(
+            sentence,
+            return_tensors="pt"
+        ).to(self.device)    # shape: [1, T]
+
+        with torch.no_grad():
+            outputs = self.lm(input_ids, labels=input_ids)
+            # outputs.loss is average NLL per token
+            nll = outputs.loss.item()          # >= 0
+            avg_log_prob = -nll                # log-prob per token
+            seq_len = input_ids.shape[1]
+            total_log_prob = avg_log_prob * seq_len
+
+        return total_log_prob
+    
+    def _run_beam_search(
+        self,
+        X_single,        # [T_enc, n_channels] or [1, T_enc, n_channels] depending on your model
+        z_single,        # [d_session] or [1, d_session]
+        seq_len,         # [2] or [1,2]
+        max_tgt_seq_len,
+        beam_size,
+        ):
+        """
+        Run beam search for a single sample
+        """
+
+        # Ensure shapes are batched (B=1) for your model call
+        X_b = X_single.unsqueeze(0)              # [1, T_enc, C]
+        z_b = z_single.unsqueeze(0)              # [1, d_session]
+        seq_lens_b = seq_len.unsqueeze(0)        # [1,2] or similar
+
+        # Each beam is a dict: {"tokens": 1D tensor, "log_prob": float, "finished": bool}
+        beams = [{
+            "tokens": torch.tensor([self.v_chr.BOS], device=self.device, dtype=torch.long),
+            "log_prob": 0.0,
+            "finished": False,
+        }]
+
+        for t in range(max_tgt_seq_len - 1):
+            # Check if all beams finished
+            if all(b["finished"] for b in beams):
+                break
+
+            new_beams = []
+
+            # Expand each current beam
+            for b in beams:
+                if b["finished"]:
+                    # Keep finished beams as-is
+                    new_beams.append(b)
+                    continue
+
+                y = b["tokens"].unsqueeze(0)  # [1, t_len]
+                logits_pho, logits_chr = self.model(
+                    X_b, None, y, z_b, seq_lens_b
+                )   # logits_chr: [1, t_len, V_chr]
+
+                # Get log-probs over vocab for last step
+                last_logits = logits_chr[:, -1, :]          # [1, V_chr]
+                log_probs = F.log_softmax(last_logits, dim=-1)[0]  # [V_chr]
+
+                # Take top-k extensions
+                topk_log_probs, topk_tokens = torch.topk(log_probs, beam_size)
+
+                for k in range(beam_size):
+                    tok = topk_tokens[k]
+                    tok_lp = topk_log_probs[k].item()
+
+                    new_tokens = torch.cat([b["tokens"], tok.unsqueeze(0)], dim=0)
+                    new_log_prob = b["log_prob"] + tok_lp
+                    finished = (tok.item() == self.v_chr.EOS)
+
+                    new_beams.append({
+                        "tokens": new_tokens,
+                        "log_prob": new_log_prob,
+                        "finished": finished,
+                    })
+
+            # Prune to top beam_size beams by log_prob
+            new_beams.sort(key=lambda bb: bb["log_prob"], reverse=True)
+            beams = new_beams[:beam_size]
+
+        # After decoding, collect beams
+        all_tokens = [b["tokens"].detach().cpu().numpy() for b in beams]
+        all_scores = [b["log_prob"] for b in beams]
+
+        # Let the caller decide which one is "best"
+        best_idx = int(np.argmax(all_scores))
+        best_tokens = all_tokens[best_idx]
+
+        return best_tokens, all_tokens, all_scores
+
+    def enable_lm(self):
+        self.config["use_lm"] = True
+
+    def disable_lm(self):
+        self.config["use_lm"] = False
     
     def load(self, filepath):
         """
@@ -291,7 +493,8 @@ class BrainToTextDecoder():
         self.model.load_state_dict(state_dict)
 
         # Restore config if present
-        self.config = checkpoint.get("config")
+        old_config = checkpoint.get("config")
+        self.config.update(old_config)
 
         # Decide device and move model there
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -304,7 +507,7 @@ class BrainToTextDecoder():
     
     def save(self, filepath):
         """
-        Save a CPU-portable checkpoint (weights + config).
+        Save a CPU-portable checkpoint (parameters and config dict).
         """
 
         filepath = pl.Path(filepath)
@@ -395,7 +598,7 @@ class BrainToTextDecoder():
         )
 
         #
-        alpha = self.config.get("alpha")
+        alpha = self.config.get("alpha_mtl")
         loss = alpha * loss_chr + (1 - alpha) * loss_pho
 
         return loss
@@ -532,8 +735,31 @@ class BrainToTextDecoder():
             self.save(dst)
 
         return
+    
+    def predict(self, ds, algo="beam", max_tgt_seq_len=128, batch_size=16, check_spelling=True):
+        """
+        """
 
-    def predict(self, ds, max_tgt_seq_len=128, batch_size=16, check_spelling=True):
+        if algo == "greedy":
+            tokens, sentences = self._predict_with_greedy_decoding(
+                ds,
+                max_tgt_seq_len=max_tgt_seq_len,
+                batch_size=batch_size,
+                check_spelling=check_spelling
+            )
+        elif algo == "beam":
+            tokens, sentences = self._predict_with_beam_seach(
+                ds,
+                max_tgt_seq_len=max_tgt_seq_len,
+                batch_size=batch_size,
+                check_spelling=check_spelling
+            )
+        else:
+            raise Exception("{algo} is not a valid algorithm")
+
+        return tokens, sentences
+
+    def _predict_with_greedy_decoding(self, ds, max_tgt_seq_len=128, batch_size=16, check_spelling=True):
         """
         Batched greedy decoding
         """
@@ -631,6 +857,77 @@ class BrainToTextDecoder():
 
         return tokens, sentences
     
+    def _predict_with_beam_seach(self, ds, max_tgt_seq_len=128, batch_size=16, check_spelling=True):
+
+        loader = DataLoader(ds, batch_size=batch_size, shuffle=False)
+        all_tokens = []
+        all_sentences = []
+
+        self.model.eval()
+        n_batches = len(loader)
+
+        with torch.no_grad():
+            for i_batch, (_, X_batch, _, _, z_batch, seq_lens_batch) in enumerate(loader):
+                print(f"Working on batch {i_batch + 1} out of {n_batches}")
+
+                X_batch = X_batch.to(self.device)
+                z_batch = z_batch.to(self.device)
+                seq_lens_batch = seq_lens_batch.to(self.device)
+
+                B = X_batch.shape[0]
+
+                for b in range(B):
+                    X_single = X_batch[b]
+                    z_single = z_batch[b]
+                    seq_lens_single = seq_lens_batch[b]
+
+                    # Beam search to get K candidates with decoder scores
+                    best_tokens_dec, beam_tokens, beam_scores = self._run_beam_search(
+                        X_single,
+                        z_single,
+                        seq_lens_single,
+                        max_tgt_seq_len=max_tgt_seq_len,
+                        beam_size=self.config.get("beam_size"),
+                    )
+
+                    # Optionally rescore with LM
+                    if self.config.get("use_lm"):
+                        best_score = -float("inf")
+                        best_tokens = None
+                        best_sentence = None
+
+                        for tok_seq, dec_score in zip(beam_tokens, beam_scores):
+                            raw_sentence = self._decode_char_sequence(tok_seq)
+                            lm_score = self._score_with_lm(raw_sentence)
+                            total_score = (
+                                self.config["alpha_model"] * dec_score +
+                                self.config["beta_lm"] * lm_score
+                            )
+                            if total_score > best_score:
+                                best_score = total_score
+                                best_tokens = tok_seq
+                                best_sentence = raw_sentence
+
+                    # Fallback: just use decoder best
+                    else:
+                        best_tokens = best_tokens_dec
+                        best_sentence = self._decode_char_sequence(best_tokens)
+
+                    # Optional spell check after rescoring
+                    if check_spelling:
+                        best_sentence = spell_check_sentence(best_sentence)
+
+                    #
+                    all_tokens.append(best_tokens)
+                    all_sentences.append(best_sentence)
+
+        # Convert list of variable-length sequences into a padded array if you want:
+        # tokens_array = pad_and_stack(all_tokens, pad_value=self.v_chr.PAD)
+        # For now, you could just return the list.
+        tokens_array = np.array(all_tokens, dtype=object)
+
+        return tokens_array, all_sentences
+    
     def score(self, ds, hypothesis=None):
         """
         Score prediction using the word error rate metric
@@ -647,11 +944,11 @@ class BrainToTextDecoder():
 
         return score
     
-    def generate_submission(self, ds, dst, check_spelling=True):
+    def generate_submission(self, ds, dst, algo="beam", check_spelling=True):
         """
         """
 
-        tokens, sentences = self.predict(ds, check_spelling=check_spelling)
+        tokens, sentences = self.predict(ds, algo=algo, check_spelling=check_spelling)
         df = pd.DataFrame({
             "id": list(range(len(sentences))),
             "text": sentences
