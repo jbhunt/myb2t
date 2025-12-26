@@ -94,7 +94,8 @@ class Frontend(nn.Module):
 
         #
         self.positional_encoding = PositionalEncoding(
-            d_model
+            d_model,
+            max_seq_len=3000
         )
 
         #
