@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "myb2t"
-version = "1.0.0"
+version = "1.0.1"
 description = "My submission to the 2025 Brain-to-text Kaggle challenge"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -18,7 +18,8 @@ dependencies = [
   "h5py",
   "pyspellchecker",
   "jiwer",
-  "pandas"
+  "pandas",
+  "transformers"
 ]
 
 [tool.setuptools.packages.find]
