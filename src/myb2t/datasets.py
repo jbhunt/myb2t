@@ -87,17 +87,17 @@ class BrainToText2025(Dataset):
                     #
                     xi_spikes = np.array(
                         stream[trial_key]["input_features"][:self.T, 0: 256],
-                        dtype=np.float32
+                        dtype=np.float16
                     )  # T time bins x N channels
                     xi_lfp = np.array(
                         stream[trial_key]["input_features"][:self.T, 256:],
-                        dtype=np.float32
+                        dtype=np.float16
                     )
                     xi = np.dstack([xi_spikes, xi_lfp])
                     seq_len_1, n_features, n_modes = xi.shape
                     if seq_len_1 < self.T:
                         n_elements = self.T - seq_len_1
-                        padding = np.full([n_elements, n_features, 2], padding_value, dtype=np.float32)
+                        padding = np.full([n_elements, n_features, 2], padding_value, dtype=np.float16)
                         xi = np.vstack([xi, padding])
                     X.append(xi)
 
@@ -138,7 +138,7 @@ class BrainToText2025(Dataset):
             # std = np.nanstd(X, axis=(0, 1))
             # if self.norm:
             #     X = (X - mean) / std
-            z = np.tile(mean, n_trials).reshape(n_trials, -1).astype(np.float32)
+            z = np.tile(mean, n_trials).reshape(n_trials, -1).astype(np.float16)
 
             #
             for xi, yi_1, yi_2, sentence, zi, seq_len in zip(X, y_1, y_2, sentences, z, seq_lens):
