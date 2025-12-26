@@ -25,6 +25,7 @@ class BrainToText2025(Dataset):
         self._X = None
         self._y_1 = None
         self._y_2 = None
+        self._sentences = None
         self._z = None
         self._trial_indices = None
     
@@ -40,6 +41,7 @@ class BrainToText2025(Dataset):
         self._X = list()
         self._y_1 = list()
         self._y_2 = list()
+        self._sentences = list()
         self._z = list()
         self._seq_lens = list()
         self._trial_indices = list()
@@ -68,7 +70,7 @@ class BrainToText2025(Dataset):
         for file in target_files_sorted:
 
             #
-            X, y_1, y_2, seq_lens = list(), list(), list(), list()
+            X, y_1, y_2, sentences, seq_lens = list(), list(), list(), list(), list()
             with h5py.File(file, 'r') as stream:
                 for trial_key in stream.keys():
 
@@ -119,6 +121,8 @@ class BrainToText2025(Dataset):
                     # Character sequence
                     yi_2 = np.array(stream[trial_key]["transcription"][:], dtype=np.int16)
                     yi_2 = self.v_chr.process_raw_sequence(yi_2)
+                    sentence = "".join(self.v_chr.decode(np.delete(yi_2, np.isin(yi_2, [self.v_chr.PAD, self.v_chr.BOS, self.v_chr.EOS]))))
+                    sentences.append(sentence)
                     seq_len_3 = np.delete(yi_2, yi_2 == self.v_chr.PAD).size
                     y_2.append(yi_2)
 
@@ -137,10 +141,11 @@ class BrainToText2025(Dataset):
             z = np.tile(mean, n_trials).reshape(n_trials, -1).astype(np.float32)
 
             #
-            for xi, yi_1, yi_2, zi, seq_len in zip(X, y_1, y_2, z, seq_lens):
+            for xi, yi_1, yi_2, sentence, zi, seq_len in zip(X, y_1, y_2, sentences, z, seq_lens):
                 self._X.append(xi)
                 self._y_1.append(yi_1)
                 self._y_2.append(yi_2)
+                self._sentences.append(sentence)
                 self._z.append(zi)
                 self._seq_lens.append(seq_len)   
 
@@ -171,6 +176,10 @@ class BrainToText2025(Dataset):
     @property
     def y_2(self):
         return self._y_2
+    
+    @property
+    def sentences(self):
+        return self._sentences
 
     @property
     def z(self):

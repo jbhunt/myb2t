@@ -726,7 +726,7 @@ class BrainToTextDecoder():
                     self.best_epoch = i_epoch
                     self.best_state_dict = copy.deepcopy(self.model.state_dict())
             if n_epochs_without_improvement >= self.config.get("tolerance"):
-                print(f"Early stopping condition met: loss has not improved in {self.config.get("tolerance")} epochs")
+                print(f"Early stopping condition met: loss has not improved in {self.config.get('tolerance')} epochs")
                 break
 
         # Save the best snapshot
@@ -786,7 +786,7 @@ class BrainToTextDecoder():
                 z_batch = z_batch.to(device=self.device)
                 seq_lens_batch = seq_lens_batch.to(device=self.device)
 
-                B, _, _ = X_batch.shape
+                B = X_batch.shape[0]
 
                 # Start-of-sequence tokens
                 y = torch.full(
@@ -921,9 +921,7 @@ class BrainToTextDecoder():
                     all_tokens.append(best_tokens)
                     all_sentences.append(best_sentence)
 
-        # Convert list of variable-length sequences into a padded array if you want:
-        # tokens_array = pad_and_stack(all_tokens, pad_value=self.v_chr.PAD)
-        # For now, you could just return the list.
+        #
         tokens_array = np.array(all_tokens, dtype=object)
 
         return tokens_array, all_sentences

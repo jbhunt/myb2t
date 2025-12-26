@@ -103,7 +103,7 @@ def make_default_config():
         "lr": 0.00005,
         "max_tgt_seq_len": 128,
         "dropout": 0.15,
-        "alpha_mtl": 0.7,
+        "alpha_mtl": 0.5,
         "corruption": 0.15,
         "max_iter": 300,
         "early_stopping": True,
