@@ -109,6 +109,7 @@ class BrainToText2025(Dataset):
                     if self.split == "test":
                         y_1.append(np.nan)
                         y_2.append(np.nan)
+                        sentences.append("")
                         seq_lens.append([seq_len_1, 0, 0])
                         continue
                     
