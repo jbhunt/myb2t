@@ -1,6 +1,7 @@
 import torch
 import re
 from spellchecker import SpellChecker
+from torch.utils.data import Dataset
 
 def compute_class_weights(ds, vocab, device):
     from collections import Counter
@@ -118,3 +119,24 @@ def make_default_config():
     }
 
     return config
+
+class SubsetWithAttrs(Dataset):
+    """
+    """
+
+    def __init__(self, dataset, indices, attrs=("sentences", "_sentences")):
+        self.dataset = dataset
+        self.indices = list(indices)
+
+        # Forward/slice specified attributes if present
+        for name in attrs:
+            if hasattr(dataset, name):
+                val = getattr(dataset, name)
+                setattr(self, name, [val[i] for i in self.indices])
+
+    def __len__(self):
+        return len(self.indices)
+
+    def __getitem__(self, i):
+        return self.dataset[self.indices[i]]
+        

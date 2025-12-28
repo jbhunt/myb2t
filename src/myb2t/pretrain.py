@@ -1,7 +1,7 @@
 import math
 import torch
 from torch import nn, optim
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, random_split
 from myb2t.helpers import make_causal_mask
 from myb2t.datasets import OpusDataset, CharacterVocabulary
 import pathlib as pl
@@ -109,7 +109,10 @@ class Pretraining():
         config,
         lr=0.0001,
         max_iter=30,
-        batch_size=32
+        batch_size=32,
+        patience=10,
+        early_stopping=True,
+        validation_fraction=0.1
         ):
         """
         """
@@ -118,6 +121,9 @@ class Pretraining():
         self.max_iter = max_iter
         self.lr = lr
         self.batch_size = batch_size
+        self.patience = patience
+        self.early_stopping = early_stopping
+        self.validation_fraction = validation_fraction
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.model = None
         self.loss_train = None
@@ -150,43 +156,77 @@ class Pretraining():
             dropout=self.config["dropout"]
         ).to(self.device)
 
+        # Dataset(s)
+        if self.early_stopping:
+            n_total = len(ds)
+            n_valid = max(1, int(n_total * self.validation_fraction))
+            n_train = n_total - n_valid
+            ds_train, ds_valid = random_split(ds, [n_train, n_valid])
+            loader_valid = DataLoader(ds_valid, batch_size=self.batch_size, shuffle=True)
+        else:
+            ds_train = ds
+            ds_valid = None
+            loader_valid = None
+        loader_train = DataLoader(ds_train, batch_size=self.batch_size, shuffle=True)
+
         #
-        loader = DataLoader(ds, batch_size=self.batch_size, shuffle=True, drop_last=True)
         loss_fn = nn.CrossEntropyLoss(ignore_index=self.v_chr.PAD)
-        self.loss_train = np.full(self.max_iter, np.nan)
+        self.loss_train = np.full(int(self.max_iter), np.nan)
+        self.loss_valid = np.full(int(self.max_iter), np.nan)
         optimizer = optim.Adam(self.model.parameters(), lr=self.lr)
 
         #
         for i_epoch in range(self.max_iter):
 
             #
-            batch_loss = 0.0
-            for X_batch in loader:
+            self.model.train()
+            batch_loss_train = 0.0
+            for X_batch in loader_train:
 
                 #
                 X_batch = X_batch.to(self.device).long()
-                # B, T = X_batch.size()
-                # if T > self.config["max_tgt_seq_len"]:
-                #     X_batch = X_batch[:, :self.config["max_tgt_seq_len"]]
                 X_in = X_batch[:, :-1]
                 X_out= X_batch[:, 1:]
                 logits = self.model(X_in, pad_token=ds.v_chr.PAD)
 
                 #
                 B, T, V = logits.size()
-                loss = loss_fn(
+                loss_train = loss_fn(
                     logits.view(B * T, V),
                     X_out.reshape(B * T)
                 )
-                batch_loss += loss.item()
+                batch_loss_train += loss_train.item()
+
                 optimizer.zero_grad()
-                loss.backward()
+                loss_train.backward()
                 optimizer.step()
 
             #
-            batch_loss /= len(loader)
-            print(f"Epoch {i_epoch + 1}: Training loss = {batch_loss:.6f}")
-            self.loss_train[i_epoch] = batch_loss
+            self.model.eval()
+            batch_loss_valid = 0.0
+            for X_batch in loader_valid:
+
+                #
+                X_batch = X_batch.to(self.device).long()
+                X_in = X_batch[:, :-1]
+                X_out= X_batch[:, 1:]
+                logits = self.model(X_in, pad_token=ds.v_chr.PAD)
+
+                #
+                B, T, V = logits.size()
+                loss_valid = loss_fn(
+                    logits.view(B * T, V),
+                    X_out.reshape(B * T)
+                )
+                batch_loss_valid += loss_valid.item()
+
+
+            #
+            batch_loss_train /= len(loader_train)
+            batch_loss_valid /= len(loader_valid)
+            print(f"Epoch {i_epoch + 1}: Training loss = {batch_loss_train:.6f}, Validation loss = {batch_loss_valid:.6f}")
+            self.loss_train[i_epoch] = batch_loss_train
+            self.loss_valid[i_epoch] = batch_loss_valid
 
         return
     

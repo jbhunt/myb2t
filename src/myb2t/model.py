@@ -2,7 +2,7 @@ from torch import nn
 from torch.nn import functional as F
 import torch
 import math
-from torch.utils.data import DataLoader, TensorDataset, random_split
+from torch.utils.data import DataLoader
 from torch.optim import Adam
 import numpy as np
 from myb2t.vocab import PhonemeVocabulary, CharacterVocabulary
@@ -670,6 +670,7 @@ class BrainToTextDecoder():
 
         return loss, loss_chr, loss_pho
     
+    # TODO: Finish coding this
     def pretrain(self, ds):
         """
         """
@@ -687,7 +688,11 @@ class BrainToTextDecoder():
             n_total = len(ds)
             n_valid = max(1, int(n_total * self.config.get("validation_fraction")))
             n_train = n_total - n_valid
-            ds_train, ds_valid = random_split(ds, [n_train, n_valid])
+            all_indices = np.arange(n_total)
+            train_indices = np.random.choice(all_indices, size=n_train, replace=False)
+            valid_indices = np.delete(all_indices, train_indices)
+            ds_train = SubsetWithAttrs(ds, train_indices)
+            ds_valid = SubsetWithAttrs(ds, valid_indices)
             loader_valid = DataLoader(ds_valid, batch_size=self.config.get("batch_size"), shuffle=True)
         else:
             ds_train = ds
@@ -763,6 +768,19 @@ class BrainToTextDecoder():
                         batch_loss_valid += loss.item()
                 batch_loss_valid /= len(loader_valid)
 
+            # Estimate WER (downsample to 3x the batch size to save time)
+            if ds_valid is not None:
+                n_samples = int(3 * self.config.get("batch_size"))
+                if n_samples > len(ds_valid):
+                    n_samples = len(ds_valid)
+                idxs = np.random.choice(np.arange(n_samples), size=n_samples, replace=False)
+                ds_valid_subset = SubsetWithAttrs(ds_valid, idxs)
+                tokens, hypothesis = self.predict(ds_valid_subset, algo="greedy", print_progress=False)
+                reference = [ds_valid_subset.dataset.sentences[i] for i in ds_valid_subset.indices]
+                wer_valid = wer(reference, hypothesis)
+            else:
+                wer_valid = np.nan
+
             # Update learning rate
             if self.config.get("early_stopping") and not np.isnan(batch_loss_valid):
                 scheduler.step(batch_loss_valid)
@@ -772,7 +790,7 @@ class BrainToTextDecoder():
             # Print out loss values
             self.loss_train[i_epoch] = batch_loss_train
             self.loss_valid[i_epoch] = batch_loss_valid
-            print(f'Epoch {i_epoch + 1} out of {self.config.get("max_iter")}: Training loss={batch_loss_train:0.6f}, Validation loss={batch_loss_valid:0.6f}')
+            print(f'Epoch {i_epoch + 1} out of {self.config.get("max_iter")}: Training loss = {batch_loss_train:0.6f}, Validation loss = {batch_loss_valid:0.6f}, Validation WER = {wer_valid:.2f}')
 
             # Update best state dict
             if batch_loss_train < best_loss_train:
@@ -811,7 +829,7 @@ class BrainToTextDecoder():
 
         return
     
-    def predict(self, ds, algo="beam", max_tgt_seq_len=128, batch_size=16, check_spelling=True):
+    def predict(self, ds, algo="beam", max_tgt_seq_len=128, batch_size=16, check_spelling=True, print_progress=True):
         """
         """
 
@@ -820,21 +838,23 @@ class BrainToTextDecoder():
                 ds,
                 max_tgt_seq_len=max_tgt_seq_len,
                 batch_size=batch_size,
-                check_spelling=check_spelling
+                check_spelling=check_spelling,
+                print_progress=print_progress
             )
         elif algo == "beam":
             tokens, sentences = self._predict_with_beam_seach(
                 ds,
                 max_tgt_seq_len=max_tgt_seq_len,
                 batch_size=batch_size,
-                check_spelling=check_spelling
+                check_spelling=check_spelling,
+                print_progress=print_progress
             )
         else:
             raise Exception("{algo} is not a valid algorithm")
 
         return tokens, sentences
 
-    def _predict_with_greedy_decoding(self, ds, max_tgt_seq_len=128, batch_size=16, check_spelling=True):
+    def _predict_with_greedy_decoding(self, ds, max_tgt_seq_len=128, batch_size=16, check_spelling=True, print_progress=True):
         """
         Batched greedy decoding
         """
@@ -854,7 +874,8 @@ class BrainToTextDecoder():
             for i_batch, (_, X_batch, _, _, z_batch, seq_lens_batch) in enumerate(loader):
                
                 #
-                print(f"Working on batch {i_batch + 1} out of {n_batches}")
+                if print_progress:
+                    print(f"Working on batch {i_batch + 1} out of {n_batches}")
 
                 # Move this batch to the target device
                 X_batch = X_batch.to(device=self.device)
@@ -932,7 +953,7 @@ class BrainToTextDecoder():
 
         return tokens, sentences
     
-    def _predict_with_beam_seach(self, ds, max_tgt_seq_len=128, batch_size=16, check_spelling=True):
+    def _predict_with_beam_seach(self, ds, max_tgt_seq_len=128, batch_size=16, check_spelling=True, print_progress=True):
 
         loader = DataLoader(ds, batch_size=batch_size, shuffle=False)
         all_tokens = []
@@ -943,7 +964,10 @@ class BrainToTextDecoder():
 
         with torch.no_grad():
             for i_batch, (_, X_batch, _, _, z_batch, seq_lens_batch) in enumerate(loader):
-                print(f"Working on batch {i_batch + 1} out of {n_batches}")
+
+                #
+                if print_progress:
+                    print(f"Working on batch {i_batch + 1} out of {n_batches}")
 
                 X_batch = X_batch.to(self.device)
                 z_batch = z_batch.to(self.device)
