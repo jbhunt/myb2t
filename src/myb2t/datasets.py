@@ -4,6 +4,7 @@ import pathlib as pl
 import h5py
 from torch.utils.data import Dataset
 from myb2t.vocab import PhonemeVocabulary, CharacterVocabulary
+import os
 
 class BrainToText2025(Dataset):
     """
@@ -220,14 +221,17 @@ class OpusDataset(Dataset):
 
         return
     
-    def load(self, n_seqs=None, max_seq_len=75, tgt_seq_len=128, save_sentences=False):
+    def load(self, n_seqs=100, min_seq_len=10, max_seq_len=50, tgt_seq_len=128, save_sentences=False,
+             seed=42, max_tries=100000):
         """
         """
 
         #
         corpus = None
+        file_size = None
         for file in self.root.iterdir():
             if file.stem == "corpus":
+                file_size = os.path.getsize(file)
                 corpus = file
                 break
         if corpus is None:
@@ -235,25 +239,38 @@ class OpusDataset(Dataset):
         
         #
         i_seq = 0
+        rng = np.random.default_rng(seed)
         self._X = np.full([n_seqs, tgt_seq_len], 0, dtype=np.int16)
         self._sentences = list()
-        with open(corpus, "r") as stream:
-            for ln in stream:
-                ln = ln.strip()
+        n_tries = 0
+        n_selected = 0
+        with open(corpus, "rb") as stream:
+            while n_selected < n_seqs and n_tries < max_tries:
+                n_tries += 1
+                byte_index = int(rng.integers(0, file_size))
+                stream.seek(byte_index)
+                stream.readline()
+                ln = stream.readline().decode("utf-8", errors="ignore").strip()
                 if not ln:
                     continue
-                if len(ln) > max_seq_len:
+                if len(ln) > max_seq_len or len(ln) < min_seq_len:
                     continue
                 seq = self.v_chr.encode(ln, tgt_seq_len=tgt_seq_len).astype(np.uint8)
-                self._X[i_seq, :] = seq
                 tokens = self.v_chr.decode(seq)
                 tokens = np.delete(tokens, np.isin(tokens, ["<PAD>", "<BOS>", "<EOS>"]))
                 sentence = "".join(tokens)
+
+                # Check for duplicates
+                duplicate = np.any(np.all(self._X == seq, axis=1))
+                if duplicate:
+                    continue
+
+                #
+                self._X[i_seq, :] = seq
                 if save_sentences:
                     self._sentences.append(sentence)
-                if (n_seqs is not None) and ((i_seq + 1) >= n_seqs):
-                    break
                 i_seq += 1
+                n_selected += 1
 
         return
     
