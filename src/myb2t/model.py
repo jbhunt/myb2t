@@ -7,6 +7,7 @@ from torch.optim import Adam
 import numpy as np
 from myb2t.vocab import PhonemeVocabulary, CharacterVocabulary
 from myb2t.helpers import *
+from myb2t.pretrain import Pretraining
 import pathlib as pl
 import copy
 from jiwer import wer
@@ -48,6 +49,63 @@ class PositionalEncoding(nn.Module):
         if self.dropout is not None:
             X_encoded = self.dropout(X_encoded)
         return X_encoded
+    
+class TemporalSubsampler(nn.Module):
+    def __init__(self, d_model, stride=2, kernel_size=5, dilation=1):
+        super().__init__()
+        self.conv = nn.Conv1d(
+            in_channels=d_model,
+            out_channels=d_model,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=(kernel_size // 2) * dilation,
+            dilation=dilation,
+        )
+        self.norm = nn.LayerNorm(d_model)
+
+        # cache these for mask conv
+        self.stride = stride
+        self.kernel_size = kernel_size
+        self.padding = (kernel_size // 2) * dilation
+        self.dilation = dilation
+
+    def forward(self, x, seq_lens):
+        """
+        """
+        B, T, D = x.shape
+        device = x.device
+        seq_lens = seq_lens.to(device=device, dtype=torch.long).view(-1)
+
+        # --- main conv ---
+        x_ds = self.conv(x.transpose(1, 2)).transpose(1, 2)  # [B, T', D]
+        x_ds = self.norm(x_ds)
+
+        # --- robust length computation via mask conv ---
+        # mask: 1 for valid timesteps, 0 for pad
+        t = torch.arange(T, device=device).unsqueeze(0)               # [1, T]
+        valid = (t < seq_lens.unsqueeze(1)).float().unsqueeze(1)      # [B, 1, T]
+
+        # Use a conv with all-ones kernel to see whether any valid input contributes
+        # to each output position.
+        ones_kernel = torch.ones(
+            1, 1, self.kernel_size, device=device, dtype=valid.dtype
+        )
+        valid_ds = torch.nn.functional.conv1d(
+            valid,
+            ones_kernel,
+            stride=self.stride,
+            padding=self.padding,
+            dilation=self.dilation,
+        )  # [B, 1, T']
+
+        # output timestep is valid if it sees any valid input in its receptive field
+        out_valid = (valid_ds.squeeze(1) > 0)             # [B, T']
+        new_seq_lens = out_valid.sum(dim=1).to(torch.long)    # [B]
+
+        # Safety: never exceed T'
+        new_seq_lens = torch.clamp(new_seq_lens, max=x_ds.size(1))
+
+        return x_ds, new_seq_lens
 
 class Frontend(nn.Module):
     """
@@ -60,6 +118,8 @@ class Frontend(nn.Module):
         d_model=128,
         dropout=0.1,
         gate_hidden=128,
+        stride=2,
+        kernel_size=5
         ):
         """
         """
@@ -93,6 +153,13 @@ class Frontend(nn.Module):
         nn.init.zeros_(self.to_beta.bias)
 
         #
+        self.subsampler = TemporalSubsampler(
+            d_model=d_model,
+            stride=stride,
+            kernel_size=kernel_size
+        )
+
+        #
         self.positional_encoding = PositionalEncoding(
             d_model,
             max_seq_len=3000
@@ -104,7 +171,7 @@ class Frontend(nn.Module):
 
         return
 
-    def forward(self, X, z, return_gate=False):
+    def forward(self, X, z, seq_lens):
         """
         """
 
@@ -132,6 +199,9 @@ class Frontend(nn.Module):
         beta = self.to_beta(s).unsqueeze(1)             # [B, 1, d_model]
         x = x * (1.0 + gamma) + beta
 
+        # Downsample
+        x, new_lens = self.subsampler(x, seq_lens)
+
         # Positional encoding
         x = self.positional_encoding(x)
 
@@ -139,9 +209,7 @@ class Frontend(nn.Module):
         x = self.norm(x)
         x = self.dropout(x)
 
-        if return_gate:
-            return x, g
-        return x
+        return x, g, new_lens
 
 class BrainToCharacterTransformer(nn.Module):
     """
@@ -211,13 +279,6 @@ class BrainToCharacterTransformer(nn.Module):
         )
 
         return
-    
-    # TODO: Split up the encoder and decoder to speed up inference
-    def _encode(self):
-        return
-    
-    def _decode(self):
-        return
 
     def forward(self, X, y_pho_seq, y_chr_seq, z, seq_lens, chr_pad_token=0):
         """
@@ -232,18 +293,21 @@ class BrainToCharacterTransformer(nn.Module):
         z = z.to(dtype=FLOAT_DTYPE)
         seq_lens = seq_lens.to(dtype=INTEGER_DTYPE)
 
+        #
+        enc_in, g, new_seq_lens = self.frontend(X, z, seq_lens[:, 0])
+        new_seq_lens = new_seq_lens.to(device=X.device, dtype=torch.long)
+        enc_in = self.encoder_input_dropout(enc_in)
+
         # Build key padding masks using sequence lengths
-        B, T_enc = X.shape[0], X.shape[1]
+        T_enc_new = enc_in.size(1)
         memory_key_padding_mask = make_key_padding_mask_from_lens(
-            seq_lens[:, 0],
-            T_enc,
+            new_seq_lens,
+            T_enc_new,
             device=device
         )
         tgt_key_padding_mask = (y_chr_seq == chr_pad_token)
 
         # Encoder input
-        enc_in = self.frontend(X, z)
-        enc_in = self.encoder_input_dropout(enc_in)
         memory = self.neural_activity_encoder(
             enc_in,
             src_key_padding_mask=memory_key_padding_mask
@@ -268,7 +332,7 @@ class BrainToCharacterTransformer(nn.Module):
         )
 
         logits_chr = self.character_head(dec_out)
-        return logits_phoneme, logits_chr
+        return logits_phoneme, logits_chr, new_seq_lens
    
 class BrainToTextDecoder():
     """
@@ -431,8 +495,9 @@ class BrainToTextDecoder():
                     continue
 
                 y = b["tokens"].unsqueeze(0)  # [1, t_len]
-                logits_pho, logits_chr = self.model(
-                    X_b, None, y, z_b, seq_lens_b
+                logits_pho, logits_chr, _ = self.model(
+                    X_b, None, y, z_b, seq_lens_b,
+                    chr_pad_token=self.v_chr.PAD
                 )   # logits_chr: [1, t_len, V_chr]
 
                 # Get log-probs over vocab for last step
@@ -561,7 +626,7 @@ class BrainToTextDecoder():
         y_outputs = y_chr[:, 1:]
 
         #
-        logits_pho, logits_chr = self.model(
+        logits_pho, logits_chr , new_seq_lens = self.model(
             X,
             y_pho,
             y_inputs,
@@ -569,6 +634,7 @@ class BrainToTextDecoder():
             seq_lens,
             chr_pad_token=self.v_chr.PAD
         )
+        new_seq_lens = new_seq_lens.to(device=self.device, dtype=torch.long)
 
         # Character loss
         B, T_chr, V_chr = logits_chr.size()
@@ -583,7 +649,7 @@ class BrainToTextDecoder():
         log_probs = log_probs.transpose(0, 1)          # [T_enc, B, V_pho]
 
         # encoder lengths (time dimension)
-        input_lengths = seq_lens[:, 0].long()          # [B]
+        # input_lengths = seq_lens[:, 0].long()          # [B]
 
         # phoneme target lengths
         target_lengths = seq_lens[:, 1].long()         # [B]
@@ -594,7 +660,7 @@ class BrainToTextDecoder():
         loss_pho = pho_loss_fn(
             log_probs,       # [T_enc, B, V_pho]
             targets_ctc,     # [sum(target_lengths)]
-            input_lengths,   # [B]
+            new_seq_lens,
             target_lengths,  # [B]
         )
 
@@ -602,7 +668,15 @@ class BrainToTextDecoder():
         alpha = self.config.get("alpha_mtl")
         loss = alpha * loss_chr + (1 - alpha) * loss_pho
 
-        return loss
+        return loss, loss_chr, loss_pho
+    
+    def pretrain(self, ds):
+        """
+        """
+
+        pt = Pretraining()
+
+        return
     
     def fit(self, ds):
         """
@@ -661,7 +735,7 @@ class BrainToTextDecoder():
             for i_batch, (i_trial, X_, y_pho, y_chr, z_, seq_lens_) in enumerate(loader_train):
 
                 # Compute loss
-                loss = self._evaluate_loss_function(
+                loss, loss_chr, loss_pho = self._evaluate_loss_function(
                     X_, y_pho, y_chr, z_, seq_lens_, chr_loss_fn, pho_loss_fn,
                     corrupt_inputs=True
                 )
@@ -682,7 +756,7 @@ class BrainToTextDecoder():
                 batch_loss_valid = 0.0
                 with torch.no_grad():
                     for i_batch, (i_trial, X_, y_pho, y_chr, z_, seq_lens_) in enumerate(loader_valid):
-                        loss = self._evaluate_loss_function(
+                        loss, _, _ = self._evaluate_loss_function(
                             X_, y_pho, y_chr, z_, seq_lens_, chr_loss_fn, pho_loss_fn,
                             corrupt_inputs=False
                         )
@@ -801,7 +875,7 @@ class BrainToTextDecoder():
 
                 # Greedy decoding for this batch
                 for t in range(max_tgt_seq_len - 1):
-                    logits_pho, logits_chr = self.model(X_batch, None, y, z_batch, seq_lens_batch)
+                    logits_pho, logits_chr, _ = self.model(X_batch, None, y, z_batch, seq_lens_batch)
                     next_token_logits = logits_chr[:, -1, :]
                     next_token = torch.argmax(next_token_logits, dim=1)
 

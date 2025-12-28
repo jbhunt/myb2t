@@ -3,7 +3,7 @@ import torch
 from torch import nn, optim
 from torch.utils.data import DataLoader
 from myb2t.helpers import make_causal_mask
-from myb2t.datasets import OpusDataset
+from myb2t.datasets import OpusDataset, CharacterVocabulary
 import pathlib as pl
 import numpy as np
 
@@ -108,7 +108,7 @@ class Pretraining():
         self,
         config,
         lr=0.0001,
-        max_iter=300,
+        max_iter=30,
         batch_size=32
         ):
         """
@@ -122,12 +122,13 @@ class Pretraining():
         self.model = None
         self.loss_train = None
         self.loss_valid = None
+        self.v_chr = CharacterVocabulary()
 
         #
         self.model = CharacterLevelLanguageModel(
             d_model=self.config["d_model"],
             d_ff=self.config["d_ff"],
-            vocab_size=31,
+            vocab_size=self.v_chr.size, # Check this
             n_heads=self.config["n_attn_heads"],
             n_layers=self.config["n_decoder_layers"],
             dropout=self.config["dropout"]
@@ -150,8 +151,8 @@ class Pretraining():
         ).to(self.device)
 
         #
-        loader = DataLoader(ds, batch_size=self.batch_size)
-        loss_fn = nn.CrossEntropyLoss(ignore_index=ds.v_chr.PAD)
+        loader = DataLoader(ds, batch_size=self.batch_size, shuffle=True, drop_last=True)
+        loss_fn = nn.CrossEntropyLoss(ignore_index=self.v_chr.PAD)
         self.loss_train = np.full(self.max_iter, np.nan)
         optimizer = optim.Adam(self.model.parameters(), lr=self.lr)
 
@@ -225,6 +226,94 @@ class Pretraining():
                 dec_layer.norm2.load_state_dict(enc_layer.norm2.state_dict())
 
             #
+            cls.model.character_head.load_state_dict(self.model.head.state_dict())
+
+        return
+    
+    def transfer_v2(self, cls):
+        """
+        Transfer LM weights into BrainToCharacterTransformer's character decoder stack.
+
+        Copies:
+        - character_embedding
+        - character_positional_encoding.pe (buffer; truncated to min length)
+        - per-layer: self_attn, linear1, linear2, norm1, norm3
+        - character_head
+
+        Does NOT copy:
+        - cross-attention (multihead_attn) or norm2
+        - frontend, neural_activity_encoder, phoneme_head
+        """
+
+        with torch.no_grad():
+
+            # -------------------------
+            # Embedding
+            # -------------------------
+            if self.model.character_embedding.weight.shape != cls.model.character_embedding.weight.shape:
+                raise ValueError(
+                    "Embedding shape mismatch: "
+                    f"pretrain {tuple(self.model.character_embedding.weight.shape)} vs "
+                    f"target {tuple(cls.model.character_embedding.weight.shape)}"
+                )
+            cls.model.character_embedding.weight.copy_(self.model.character_embedding.weight)
+
+            # -------------------------
+            # Positional encoding buffer: (max_seq_len, d_model)
+            # Copy as much as fits to avoid max_seq_len mismatch issues.
+            # -------------------------
+            if not (hasattr(self.model.positional_encoding, "pe") and hasattr(cls.model.character_positional_encoding, "pe")):
+                raise AttributeError("Missing .pe buffer on positional encodings.")
+
+            pe_src = self.model.positional_encoding.pe
+            pe_tgt = cls.model.character_positional_encoding.pe
+
+            if pe_src.size(1) != pe_tgt.size(1):
+                raise ValueError(
+                    "Positional encoding d_model mismatch: "
+                    f"pretrain d_model={pe_src.size(1)} vs target d_model={pe_tgt.size(1)}"
+                )
+
+            L = min(pe_src.size(0), pe_tgt.size(0))
+            pe_tgt[:L, :].copy_(pe_src[:L, :])
+
+            # -------------------------
+            # Decoder stack: copy self-attn + FFN (+ correct norms)
+            # -------------------------
+            pre_layers = self.model.encoder.layers                # TransformerEncoderLayer list
+            dec_layers = cls.model.character_decoder.layers        # TransformerDecoderLayer list
+            n_copy = min(len(pre_layers), len(dec_layers))
+
+            for i in range(n_copy):
+                enc_layer = pre_layers[i]
+                dec_layer = dec_layers[i]
+
+                # Self-attention (decoder-side masked self-attn)
+                dec_layer.self_attn.load_state_dict(enc_layer.self_attn.state_dict())
+
+                # Feed-forward
+                dec_layer.linear1.load_state_dict(enc_layer.linear1.state_dict())
+                dec_layer.linear2.load_state_dict(enc_layer.linear2.state_dict())
+
+                # Norms:
+                # Encoder: norm1 (self-attn), norm2 (ffn)
+                # Decoder: norm1 (self-attn), norm2 (cross-attn), norm3 (ffn)
+                dec_layer.norm1.load_state_dict(enc_layer.norm1.state_dict())
+                dec_layer.norm3.load_state_dict(enc_layer.norm2.state_dict())
+
+                # Intentionally do NOT copy:
+                #   dec_layer.multihead_attn (cross-attn)
+                #   dec_layer.norm2 (cross-attn norm)
+
+            # -------------------------
+            # Output head
+            # -------------------------
+            if self.model.head.weight.shape != cls.model.character_head.weight.shape:
+                raise ValueError(
+                    "Character head weight shape mismatch: "
+                    f"pretrain {tuple(self.model.head.weight.shape)} vs "
+                    f"target {tuple(cls.model.character_head.weight.shape)}"
+                )
             cls.model.character_head.load_state_dict(self.model.head.state_dict())
 
         return

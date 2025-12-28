@@ -216,10 +216,11 @@ class OpusDataset(Dataset):
         self.root = root
         self.v_chr = CharacterVocabulary()
         self._X = None
+        self._sentences = None
 
         return
     
-    def load(self, n_seqs=None, tgt_seq_len=1000):
+    def load(self, n_seqs=None, max_seq_len=75, tgt_seq_len=128, save_sentences=False):
         """
         """
 
@@ -234,25 +235,35 @@ class OpusDataset(Dataset):
         
         #
         i_seq = 0
-        X = list()
+        self._X = np.full([n_seqs, tgt_seq_len], 0, dtype=np.int16)
+        self._sentences = list()
         with open(corpus, "r") as stream:
             for ln in stream:
                 ln = ln.strip()
                 if not ln:
                     continue
-                seq = self.v_chr.encode(ln, tgt_seq_len=tgt_seq_len)
-                seq = seq.astype(np.int16)
-                X.append(seq)
+                if len(ln) > max_seq_len:
+                    continue
+                seq = self.v_chr.encode(ln, tgt_seq_len=tgt_seq_len).astype(np.uint8)
+                self._X[i_seq, :] = seq
+                tokens = self.v_chr.decode(seq)
+                tokens = np.delete(tokens, np.isin(tokens, ["<PAD>", "<BOS>", "<EOS>"]))
+                sentence = "".join(tokens)
+                if save_sentences:
+                    self._sentences.append(sentence)
                 if (n_seqs is not None) and ((i_seq + 1) >= n_seqs):
                     break
                 i_seq += 1
-        self._X = np.array(X)
 
         return
     
     @property
     def X(self):
         return self._X
+    
+    @property
+    def sentences(self):
+        return self._sentences
     
     def __len__(self):
         return self.X.shape[0]
