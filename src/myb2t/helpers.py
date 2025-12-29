@@ -2,6 +2,8 @@ import torch
 import re
 from spellchecker import SpellChecker
 from torch.utils.data import Dataset
+import re
+import unicodedata
 
 def compute_class_weights(ds, vocab, device):
     from collections import Counter
@@ -139,4 +141,34 @@ class SubsetWithAttrs(Dataset):
 
     def __getitem__(self, i):
         return self.dataset[self.indices[i]]
+
+def normalize_sentence(s):
+    """
+    """
+
+    #
+    _re_keep = re.compile(r"[^a-z0-9'\s]+")
+    _re_ws = re.compile(r"\s+")
+
+    #
+    if s is None:
+        return ""
+
+    # Unicode normalize (handles odd apostrophes, etc.)
+    s = unicodedata.normalize("NFKC", s)
+
+    # Lowercase
+    s = s.lower()
+
+    # Convert “smart quotes” apostrophes to plain apostrophe
+    s = s.replace("’", "'").replace("`", "'")
+
+    # Remove disallowed characters (keep letters, digits, whitespace, apostrophe)
+    s = _re_keep.sub(" ", s)
+
+    # Collapse whitespace
+    s = _re_ws.sub(" ", s).strip()
+
+    return s
+
         

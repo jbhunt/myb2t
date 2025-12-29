@@ -851,8 +851,13 @@ class BrainToTextDecoder():
             )
         else:
             raise Exception("{algo} is not a valid algorithm")
+        
+        #
+        sentences_normalized = list()
+        for s in sentences:
+            sentences_normalized.append(normalize_sentence(s))
 
-        return tokens, sentences
+        return tokens, sentences_normalized
 
     def _predict_with_greedy_decoding(self, ds, max_tgt_seq_len=128, batch_size=16, check_spelling=True, print_progress=True):
         """
