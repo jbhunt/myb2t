@@ -107,10 +107,7 @@ class Pretraining():
     def __init__(
         self,
         config,
-        lr=0.0001,
-        max_iter=30,
         batch_size=32,
-        patience=10,
         early_stopping=True,
         validation_fraction=0.1
         ):
@@ -118,10 +115,7 @@ class Pretraining():
         """
 
         self.config = config
-        self.max_iter = max_iter
-        self.lr = lr
         self.batch_size = batch_size
-        self.patience = patience
         self.early_stopping = early_stopping
         self.validation_fraction = validation_fraction
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -142,19 +136,10 @@ class Pretraining():
 
         return
     
-    def fit(self, ds):
+    def pretrain(self, ds, max_iter=10, lr=0.00005):
         """
+        Pre-train with the OPUS dataset
         """
-
-        #
-        self.model = CharacterLevelLanguageModel(
-            d_model=self.config["d_model"],
-            d_ff=self.config["d_ff"],
-            vocab_size=ds.v_chr.size,
-            n_heads=self.config["n_attn_heads"],
-            n_layers=self.config["n_decoder_layers"],
-            dropout=self.config["dropout"]
-        ).to(self.device)
 
         # Dataset(s)
         if self.early_stopping:
@@ -171,12 +156,12 @@ class Pretraining():
 
         #
         loss_fn = nn.CrossEntropyLoss(ignore_index=self.v_chr.PAD)
-        self.loss_train = np.full(int(self.max_iter), np.nan)
-        self.loss_valid = np.full(int(self.max_iter), np.nan)
-        optimizer = optim.Adam(self.model.parameters(), lr=self.lr)
+        self.loss_train = np.full(int(max_iter), np.nan)
+        self.loss_valid = np.full(int(max_iter), np.nan)
+        optimizer = optim.Adam(self.model.parameters(), lr=lr)
 
         #
-        for i_epoch in range(self.max_iter):
+        for i_epoch in range(max_iter):
 
             #
             self.model.train()
@@ -230,6 +215,85 @@ class Pretraining():
 
         return
     
+    def fine_tune(self, ds, max_iter=10, lr=0.00005):
+        """
+        Fine tune using the Brain-to-Text dataset
+        """
+
+        # Dataset(s)
+        if self.early_stopping:
+            n_total = len(ds)
+            n_valid = max(1, int(n_total * self.validation_fraction))
+            n_train = n_total - n_valid
+            ds_train, ds_valid = random_split(ds, [n_train, n_valid])
+            loader_valid = DataLoader(ds_valid, batch_size=self.batch_size, shuffle=True)
+        else:
+            ds_train = ds
+            ds_valid = None
+            loader_valid = None
+        loader_train = DataLoader(ds_train, batch_size=self.batch_size, shuffle=True)
+
+        #
+        loss_fn = nn.CrossEntropyLoss(ignore_index=self.v_chr.PAD)
+        self.loss_train = np.full(int(max_iter), np.nan)
+        self.loss_valid = np.full(int(max_iter), np.nan)
+        optimizer = optim.Adam(self.model.parameters(), lr=lr)
+
+        #
+        for i_epoch in range(max_iter):
+
+            #
+            self.model.train()
+            batch_loss_train = 0.0
+            for _, _, _, X_batch, _, _ in loader_train:
+
+                #
+                X_batch = X_batch.to(self.device).long()
+                X_in = X_batch[:, :-1]
+                X_out= X_batch[:, 1:]
+                logits = self.model(X_in, pad_token=ds.v_chr.PAD)
+
+                #
+                B, T, V = logits.size()
+                loss_train = loss_fn(
+                    logits.view(B * T, V),
+                    X_out.reshape(B * T)
+                )
+                batch_loss_train += loss_train.item()
+
+                optimizer.zero_grad()
+                loss_train.backward()
+                optimizer.step()
+
+            #
+            self.model.eval()
+            batch_loss_valid = 0.0
+            for _, _, _, X_batch, _, _ in loader_valid:
+
+                #
+                X_batch = X_batch.to(self.device).long()
+                X_in = X_batch[:, :-1]
+                X_out= X_batch[:, 1:]
+                logits = self.model(X_in, pad_token=ds.v_chr.PAD)
+
+                #
+                B, T, V = logits.size()
+                loss_valid = loss_fn(
+                    logits.view(B * T, V),
+                    X_out.reshape(B * T)
+                )
+                batch_loss_valid += loss_valid.item()
+
+
+            #
+            batch_loss_train /= len(loader_train)
+            batch_loss_valid /= len(loader_valid)
+            print(f"Epoch {i_epoch + 1}: Training loss = {batch_loss_train:.6f}, Validation loss = {batch_loss_valid:.6f}")
+            self.loss_train[i_epoch] = batch_loss_train
+            self.loss_valid[i_epoch] = batch_loss_valid
+
+        return
+    
     def load(self, src):
         state_dict = torch.load(src)
         self.model.load_state_dict(state_dict)
@@ -240,37 +304,6 @@ class Pretraining():
         return
     
     def transfer(self, cls):
-        """
-        """
-
-        with torch.no_grad():
-
-            # embeddings and positional encoding
-            cls.model.character_embedding.weight.copy_(self.model.character_embedding.weight)
-            cls.model.character_positional_encoding.pe.copy_(self.model.positional_encoding.pe)
-
-            # Encoder weights
-            for i in range(len(self.model.encoder.layers)):
-                enc_layer = self.model.encoder.layers[i]
-                dec_layer = cls.model.character_decoder.layers[i]
-
-                # Self-attention block
-                dec_layer.self_attn.load_state_dict(enc_layer.self_attn.state_dict())
-
-                # Feed-forward block
-                dec_layer.linear1.load_state_dict(enc_layer.linear1.state_dict())
-                dec_layer.linear2.load_state_dict(enc_layer.linear2.state_dict())
-
-                # Norms that surround self-attn and FFN
-                dec_layer.norm1.load_state_dict(enc_layer.norm1.state_dict())
-                dec_layer.norm2.load_state_dict(enc_layer.norm2.state_dict())
-
-            #
-            cls.model.character_head.load_state_dict(self.model.head.state_dict())
-
-        return
-    
-    def transfer_v2(self, cls):
         """
         Transfer LM weights into BrainToCharacterTransformer's character decoder stack.
 

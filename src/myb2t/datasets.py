@@ -10,7 +10,7 @@ class BrainToText2025(Dataset):
     """
     """
 
-    def __init__(self, root=None, T=int(0.02 * 1000 * 1), split="train", norm=False):
+    def __init__(self, root=None, T=int(0.02 * 1000 * 1), split="train", norm=False, chr_seq_len=128):
         """
         """
 
@@ -29,6 +29,7 @@ class BrainToText2025(Dataset):
         self._sentences = None
         self._z = None
         self._trial_indices = None
+        self.chr_seq_len = chr_seq_len
     
         return
     
@@ -116,13 +117,13 @@ class BrainToText2025(Dataset):
                     
                     # Phoneme sequence
                     yi_1 = np.array(stream[trial_key]["seq_class_ids"][:], dtype=np.int16)
-                    yi_1 = self.v_pho.process_raw_sequence(yi_1)
+                    yi_1 = self.v_pho.process_raw_sequence(yi_1, tgt_seq_len=128)
                     seq_len_2 = np.delete(yi_1, yi_1 == self.v_pho.PAD).size
                     y_1.append(yi_1)
 
                     # Character sequence
                     yi_2 = np.array(stream[trial_key]["transcription"][:], dtype=np.int16)
-                    yi_2 = self.v_chr.process_raw_sequence(yi_2)
+                    yi_2 = self.v_chr.process_raw_sequence(yi_2, tgt_seq_len=self.chr_seq_len)
                     sentence = "".join(self.v_chr.decode(np.delete(yi_2, np.isin(yi_2, [self.v_chr.PAD, self.v_chr.BOS, self.v_chr.EOS]))))
                     sentences.append(sentence)
                     seq_len_3 = np.delete(yi_2, yi_2 == self.v_chr.PAD).size

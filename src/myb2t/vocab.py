@@ -61,7 +61,7 @@ class PhonemeVocabulary():
 
         return
     
-    def process_raw_sequence(self, in_seq, padding_token=0):
+    def process_raw_sequence(self, in_seq, tgt_seq_len=128, padding_token=0):
         """
         """
 
@@ -75,6 +75,16 @@ class PhonemeVocabulary():
             np.array([self.BOS]),
             out_seq
         ])
+
+        #
+        if tgt_seq_len is not None:
+            if len(out_seq) > tgt_seq_len:
+                out_seq = out_seq[:tgt_seq_len]
+            if len(out_seq) < tgt_seq_len:
+                out_seq = np.concatenate([
+                    out_seq,
+                    np.full(tgt_seq_len - len(out_seq), self.PAD)
+                ])
 
         return out_seq
     
@@ -258,7 +268,7 @@ class CharacterVocabulary():
 
         return ch
 
-    def process_raw_sequence(self, in_seq):
+    def process_raw_sequence(self, in_seq, tgt_seq_len=128):
         """
         Map a raw sequence of integer codepoints to the compact vocabulary,
         apply normalization, and insert BOS/EOS.
@@ -293,6 +303,16 @@ class CharacterVocabulary():
 
         # Prepend BOS
         out_seq = np.concatenate([np.array([self.BOS], dtype=np.int64), out_seq])
+
+        #
+        if tgt_seq_len is not None:
+            if len(out_seq) > tgt_seq_len:
+                out_seq = out_seq[:tgt_seq_len]
+            if len(out_seq) < tgt_seq_len:
+                out_seq = np.concatenate([
+                    out_seq,
+                    np.full(tgt_seq_len - len(out_seq), self.PAD)
+                ])
 
         return out_seq
     
