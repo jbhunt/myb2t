@@ -362,17 +362,20 @@ class BrainToTextDecoder(BeamSearchMixin, GreedyDecodingMixin):
 
         # 
         self.config = config
-        self.model = BrainToCharacterTransformer(
-            d_model=config["d_model"],
-            dim_ff=config["d_ff"],
-            d_session=config["d_session"],
-            n_encoder_layers=config["n_encoder_layers"],
-            n_decoder_layers=config["n_decoder_layers"],
-            n_heads=config["n_attn_heads"],
-            dropout=config["dropout"],
-            phoneme_vocab_size=self.v_pho.size,
-            character_vocab_size=self.v_chr.size,
-        ).to(self.device)
+        if self.config is None or len(self.config) == 0:
+            self.model = None
+        else:
+            self.model = BrainToCharacterTransformer(
+                d_model=config["d_model"],
+                dim_ff=config["d_ff"],
+                d_session=config["d_session"],
+                n_encoder_layers=config["n_encoder_layers"],
+                n_decoder_layers=config["n_decoder_layers"],
+                n_heads=config["n_attn_heads"],
+                dropout=config["dropout"],
+                phoneme_vocab_size=self.v_pho.size,
+                character_vocab_size=self.v_chr.size,
+            ).to(self.device)
 
         #
         self.out_dir = out_dir
@@ -411,11 +414,26 @@ class BrainToTextDecoder(BeamSearchMixin, GreedyDecodingMixin):
         if state_dict is None:
             raise KeyError("Checkpoint missing both 'model_state_dict' and 'best_state_dict'.")
 
-        self.model.load_state_dict(state_dict)
-
         # Restore config if present
         old_config = checkpoint.get("config")
+        if self.config is None:
+            self.config = {}
         self.config.update(old_config)
+
+        #
+        if self.model is None:
+            self.model = BrainToCharacterTransformer(
+                d_model=self.config["d_model"],
+                dim_ff=self.config["d_ff"],
+                d_session=self.config["d_session"],
+                n_encoder_layers=self.config["n_encoder_layers"],
+                n_decoder_layers=self.config["n_decoder_layers"],
+                n_heads=self.config["n_attn_heads"],
+                dropout=self.config["dropout"],
+                phoneme_vocab_size=self.v_pho.size,
+                character_vocab_size=self.v_chr.size,
+            ).to(self.device)
+        self.model.load_state_dict(state_dict)
 
         # Decide device and move model there
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
