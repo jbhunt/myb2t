@@ -558,15 +558,25 @@ class BrainToTextDecoder(BeamSearchMixin, GreedyDecodingMixin):
 
         # Init LR scheduler
         n_steps_total = self.config["max_iter"] * len(loader_train)
-        n_steps_warmup = max(1, min(1000, int(0.1 * n_steps_total)))
-        def lr_lambda(i_step):
-            if i_step < n_steps_warmup:
-                return (i_step + 1) / n_steps_warmup
-            # cosine to 10% of base LR (adjust as desired)
-            progress = (i_step - n_steps_warmup) / max(1, n_steps_total - n_steps_warmup)
+        n_steps_warmup = max(1, min(1500, int(0.05 * n_steps_total)))
+        n_steps_hold = int(0.15 * n_steps_total)
+        def lr_lambda(step):
+            # Warmup
+            if step < n_steps_warmup:
+                return (step + 1) / n_steps_warmup
+
+            # Hold at max LR
+            if step < n_steps_warmup + n_steps_hold:
+                return 1.0
+
+            # Cosine decay
+            decay_steps = n_steps_total - n_steps_warmup - n_steps_hold
+            progress = (step - n_steps_warmup - n_steps_hold) / max(1, decay_steps)
+            progress = min(progress, 1.0)
+
             cosine = 0.5 * (1 + math.cos(math.pi * progress))
-            return 0.1 + 0.9 * cosine  # min_lr = 0.1 * base_lr
-        scheduler = LambdaLR(optimizer, lr_lambda)
+            return 0.1 + 0.9 * cosine   # floor at 10% of base LR
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
         # Loss tracking
         self.loss_train = np.full(self.config.get("max_iter"), np.nan)
@@ -634,12 +644,18 @@ class BrainToTextDecoder(BeamSearchMixin, GreedyDecodingMixin):
                 wer_valid = np.nan
                 cer_valid = np.nan
             
-            # Print out loss values
+            # Print out progress report
             self.loss_train[i_epoch] = batch_loss_train
             self.loss_valid[i_epoch] = batch_loss_valid
             self.wer_valid[i_epoch] = wer_valid
             current_lr = optimizer.param_groups[0]["lr"]
-            print(f'Epoch {i_epoch + 1} out of {self.config.get("max_iter")}: Learning rate = {current_lr:.9f}, Loss (train) = {batch_loss_train:0.6f}, Loss (Validation) = {batch_loss_valid:0.6f}, WER = {wer_valid:.3f}, CER = {cer_valid:.3f}')
+            if i_step < n_steps_warmup:
+                phase = "Warmup"
+            elif i_step < n_steps_warmup + n_steps_hold:
+                phase = "Hold"
+            else:
+                phase = "Cosine decay"
+            print(f'Epoch {i_epoch + 1} out of {self.config.get("max_iter")} [{phase}]: Learning rate={current_lr:.9f}, Loss (train)={batch_loss_train:0.3f}, Loss (Validation)={batch_loss_valid:0.3f}, WER={wer_valid:.3f}, CER={cer_valid:.3f}, N epochs without improvement={n_epochs_without_improvement}/{self.config["tolerance"]}')
 
             # Update best state dict using the WER
             if wer_valid < best_wer_valid:

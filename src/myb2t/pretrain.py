@@ -159,7 +159,7 @@ class Pretraining():
         self.loss_train = np.full(int(max_iter), np.nan)
         self.loss_valid = np.full(int(max_iter), np.nan)
         optimizer = optim.Adam(self.model.parameters(), lr=lr)
-
+        
         #
         for i_epoch in range(max_iter):
 
