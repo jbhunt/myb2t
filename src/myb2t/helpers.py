@@ -97,8 +97,8 @@ def make_default_config():
     """
 
     config = {
-        "d_model": 256,
-        "d_ff": 1024,
+        "d_model": 384,
+        "d_ff": 1536,
         "d_session": 16,
         "n_encoder_layers": 6,
         "n_decoder_layers": 3,
@@ -110,7 +110,7 @@ def make_default_config():
         "corruption": 0.1,
         "max_iter": 100,
         "early_stopping": True,
-        "tolerance": 5,
+        "tolerance": 10,
         "validation_fraction": 0.1,
         "batch_size": 32,
         "use_lm": True,
