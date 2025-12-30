@@ -106,7 +106,7 @@ def make_default_config():
         "lr": 0.00008,
         "max_tgt_seq_len": 128,
         "dropout": 0.1,
-        "lambda": 1.0,
+        "lambda": 1.0, # Balances objectives (higher values emphasizes characters, lower values emphasize phonemes)
         "corruption": 0.1,
         "max_iter": 100,
         "early_stopping": True,
@@ -115,9 +115,9 @@ def make_default_config():
         "batch_size": 32,
         "use_lm": True,
         "lm_name": "gpt2",
-        "beam_size": 30,
-        "alpha": 1.0,
-        "beta": 0.3,
+        "beam_size": 15,
+        "alpha": 1.0, # Length penalty
+        "beta": 0.3, #
         "beta_len": 0.0,
         "min_len": 3,
         "cache_lm_scores": True,

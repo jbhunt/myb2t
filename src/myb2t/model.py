@@ -681,7 +681,7 @@ class BrainToTextDecoder(BeamSearchMixin, GreedyDecodingMixin):
 
         # Save the best snapshot
         if self.out_dir is not None:
-            dst = self.out_dir.joinpath("snapshots", f"snapshot-final.pkl")
+            dst = self.out_dir.joinpath("snapshots", f"snapshot-best.pkl")
             self.save(dst)
 
         return
