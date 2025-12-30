@@ -103,7 +103,7 @@ def make_default_config():
         "n_encoder_layers": 6,
         "n_decoder_layers": 3,
         "n_attn_heads": 8,
-        "lr": 0.00008,
+        "lr": 0.00007,
         "max_tgt_seq_len": 128,
         "dropout": 0.1,
         "lambda": 1.0, # Balances objectives (higher values emphasizes characters, lower values emphasize phonemes)
