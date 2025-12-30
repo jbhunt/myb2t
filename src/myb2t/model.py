@@ -12,7 +12,7 @@ import pathlib as pl
 import copy
 from jiwer import wer, cer
 import pandas as pd
-from myb2t.ranking import LMRescoringMixin, BeamSearchMixin, GreedyDecodingMixin
+from myb2t.ranking import BeamSearchMixin, GreedyDecodingMixin
 
 # Constants
 FLOAT_DTYPE = torch.float32
@@ -334,7 +334,7 @@ class BrainToCharacterTransformer(nn.Module):
         logits_chr = self.character_head(dec_out)
         return logits_phoneme, logits_chr, new_seq_lens
    
-class BrainToTextDecoder(LMRescoringMixin, BeamSearchMixin, GreedyDecodingMixin):
+class BrainToTextDecoder(BeamSearchMixin, GreedyDecodingMixin):
     """
     """
 
@@ -504,9 +504,6 @@ class BrainToTextDecoder(LMRescoringMixin, BeamSearchMixin, GreedyDecodingMixin)
         log_probs = F.log_softmax(logits_pho, dim=-1)  # [B, T_enc, V_pho]
         log_probs = log_probs.transpose(0, 1)          # [T_enc, B, V_pho]
 
-        # encoder lengths (time dimension)
-        # input_lengths = seq_lens[:, 0].long()          # [B]
-
         # phoneme target lengths
         target_lengths = seq_lens[:, 1].long()         # [B]
         mask = (y_pho != self.v_pho.PAD)
@@ -521,8 +518,8 @@ class BrainToTextDecoder(LMRescoringMixin, BeamSearchMixin, GreedyDecodingMixin)
         )
 
         #
-        alpha = self.config.get("alpha_mtl")
-        loss = alpha * loss_chr + (1 - alpha) * loss_pho
+        lambda_ = self.config.get("lambda")
+        loss = lambda_ * loss_chr + (1 - lambda_) * loss_pho
 
         return loss, loss_chr, loss_pho
     
@@ -561,7 +558,7 @@ class BrainToTextDecoder(LMRescoringMixin, BeamSearchMixin, GreedyDecodingMixin)
 
         # Init LR scheduler
         n_steps_total = self.config["max_iter"] * len(loader_train)
-        n_steps_warmup = max(1, min(100, int(0.1 * n_steps_total)))
+        n_steps_warmup = max(1, min(1000, int(0.1 * n_steps_total)))
         def lr_lambda(i_step):
             if i_step < n_steps_warmup:
                 return (i_step + 1) / n_steps_warmup
@@ -685,8 +682,6 @@ class BrainToTextDecoder(LMRescoringMixin, BeamSearchMixin, GreedyDecodingMixin)
                 print_progress=print_progress
             )
         elif algo == "beam":
-            if self.config.get("use_lm"):
-                self._init_lm()
             tokens, sentences = self._predict_with_beam_seach(
                 ds,
                 max_tgt_seq_len=max_tgt_seq_len,

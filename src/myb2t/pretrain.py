@@ -215,7 +215,7 @@ class Pretraining():
 
         return
     
-    def fine_tune(self, ds, max_iter=10, lr=0.00005):
+    def finetune(self, ds, max_iter=10, lr=0.00005):
         """
         Fine tune using the Brain-to-Text dataset
         """

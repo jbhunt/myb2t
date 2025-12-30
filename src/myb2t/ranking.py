@@ -5,13 +5,15 @@ import numpy as np
 from myb2t.helpers import *
 from transformers import GPT2Tokenizer, GPT2LMHeadModel
 
-class LMRescoringMixin:
+class BeamSearchMixin:
     """
     Mixin for:
       - initializing an optional HF LM
       - decoding char token sequences
       - scoring text with LM robustly (guards against empty inputs)
     """
+
+    lm = None
 
     def _init_lm(self):
         """
@@ -72,14 +74,6 @@ class LMRescoringMixin:
             total_log_prob = avg_log_prob * T
 
         return total_log_prob
-
-class BeamSearchMixin:
-    """
-    Mixin for:
-      - single-example beam search
-      - dataset-level beam decoding
-      - optional LM reranking with length normalization + caching + min_len constraint
-    """
 
     def _run_beam_search(
         self,
@@ -174,6 +168,10 @@ class BeamSearchMixin:
         Beam decoding + (optional) LM reranking.
         """
 
+        #
+        if self.config.get("use_lm") and self.lm is None:
+                self._init_lm()
+
         loader = DataLoader(ds, batch_size=batch_size, shuffle=False)
         all_tokens = []
         all_sentences = []
@@ -182,10 +180,10 @@ class BeamSearchMixin:
         n_batches = len(loader)
 
         beam_size = int(self.config.get("beam_size", 10))
-        beta_lm = float(self.config.get("beta_lm", 0.0))
-        alpha_model = float(self.config.get("alpha_model", 1.0))
+        beta = float(self.config.get("beta", 0.0))
+        alpha = float(self.config.get("alpha", 1.0))
         beta_len = float(self.config.get("beta_len", 0.0))
-        min_len = int(self.config.get("min_len", 2))  # recommend >=2 so BOS->EOS is disallowed
+        min_len = int(self.config.get("min_len", 3))  # recommend >=2 so BOS->EOS is disallowed
         cache_lm = bool(self.config.get("cache_lm_scores", True))
 
         lm_cache = {}
@@ -263,8 +261,8 @@ class BeamSearchMixin:
 
                             # Combined score (length-normalized + optional explicit length term)
                             total_score = (
-                                alpha_model * dec_lp +
-                                beta_lm * lm_lp +
+                                alpha * dec_lp +
+                                beta * lm_lp +
                                 beta_len * T_dec
                             )
 
