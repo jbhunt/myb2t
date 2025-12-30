@@ -3,16 +3,16 @@ from torch.nn import functional as F
 import torch
 import math
 from torch.utils.data import DataLoader
-from torch.optim import Adam
+from torch.optim import AdamW
+from torch.optim.lr_scheduler import LambdaLR
 import numpy as np
 from myb2t.vocab import PhonemeVocabulary, CharacterVocabulary
 from myb2t.helpers import *
-from myb2t.pretrain import Pretraining
 import pathlib as pl
 import copy
-from jiwer import wer
+from jiwer import wer, cer
 import pandas as pd
-from transformers import GPT2Tokenizer, GPT2LMHeadModel
+from myb2t.ranking import LMRescoringMixin, BeamSearchMixin, GreedyDecodingMixin
 
 # Constants
 FLOAT_DTYPE = torch.float32
@@ -334,7 +334,7 @@ class BrainToCharacterTransformer(nn.Module):
         logits_chr = self.character_head(dec_out)
         return logits_phoneme, logits_chr, new_seq_lens
    
-class BrainToTextDecoder():
+class BrainToTextDecoder(LMRescoringMixin, BeamSearchMixin, GreedyDecodingMixin):
     """
     """
 
@@ -347,6 +347,8 @@ class BrainToTextDecoder():
         ):
         """
         """
+
+        super().__init__()
 
         #
         if device is None:
@@ -392,154 +394,7 @@ class BrainToTextDecoder():
         if snapshot is not None:
             self.load(snapshot)
 
-        #
-        self.lm = None
-        if self.config.get("use_lm"):
-            self._init_lm()
-
         return
-    
-    def _init_lm(self):
-        """
-        Initialize the lange model (optional)
-        """
-
-        lm_name = self.config.get("lm_name", "gpt2")
-        self.lm_tokenizer = GPT2Tokenizer.from_pretrained(lm_name)
-        self.lm = GPT2LMHeadModel.from_pretrained(lm_name)
-        self.lm.to(self.device)
-        self.lm.eval()
-        for p in self.lm.parameters():
-            p.requires_grad = False
-
-        return
-
-    def _decode_char_sequence(self, token_seq_1d):
-        """
-        Translate tokens into characters
-        """
-
-        special_tokens = [self.v_chr.BOS, self.v_chr.EOS, self.v_chr.PAD]
-        if torch.is_tensor(token_seq_1d):
-            token_seq_1d = token_seq_1d.cpu().numpy()
-        token_seq = np.array(token_seq_1d)
-
-        mask = ~np.isin(token_seq, special_tokens)
-        filtered = token_seq[mask]
-
-        chars = self.v_chr.decode(filtered)
-        sentence = "".join(chars)
-
-        return sentence
-    
-    def _score_with_lm(self, sentence):
-        """
-        Returns a scalar log-probability score using a language model
-        """
-
-        if self.config.get("use_lm") == False:
-            return 0.0
-
-        # Encode sentence
-        input_ids = self.lm_tokenizer.encode(
-            sentence,
-            return_tensors="pt"
-        ).to(self.device)    # shape: [1, T]
-
-        with torch.no_grad():
-            outputs = self.lm(input_ids, labels=input_ids)
-            # outputs.loss is average NLL per token
-            nll = outputs.loss.item()          # >= 0
-            avg_log_prob = -nll                # log-prob per token
-            seq_len = input_ids.shape[1]
-            total_log_prob = avg_log_prob * seq_len
-
-        return total_log_prob
-    
-    def _run_beam_search(
-        self,
-        X_single,        # [T_enc, n_channels] or [1, T_enc, n_channels] depending on your model
-        z_single,        # [d_session] or [1, d_session]
-        seq_len,         # [2] or [1,2]
-        max_tgt_seq_len,
-        beam_size,
-        ):
-        """
-        Run beam search for a single sample
-        """
-
-        # Ensure shapes are batched (B=1) for your model call
-        X_b = X_single.unsqueeze(0)              # [1, T_enc, C]
-        z_b = z_single.unsqueeze(0)              # [1, d_session]
-        seq_lens_b = seq_len.unsqueeze(0)        # [1,2] or similar
-
-        # Each beam is a dict: {"tokens": 1D tensor, "log_prob": float, "finished": bool}
-        beams = [{
-            "tokens": torch.tensor([self.v_chr.BOS], device=self.device, dtype=torch.long),
-            "log_prob": 0.0,
-            "finished": False,
-        }]
-
-        for t in range(max_tgt_seq_len - 1):
-            # Check if all beams finished
-            if all(b["finished"] for b in beams):
-                break
-
-            new_beams = []
-
-            # Expand each current beam
-            for b in beams:
-                if b["finished"]:
-                    # Keep finished beams as-is
-                    new_beams.append(b)
-                    continue
-
-                y = b["tokens"].unsqueeze(0)  # [1, t_len]
-                logits_pho, logits_chr, _ = self.model(
-                    X_b, None, y, z_b, seq_lens_b,
-                    chr_pad_token=self.v_chr.PAD
-                )   # logits_chr: [1, t_len, V_chr]
-
-                # Get log-probs over vocab for last step
-                last_logits = logits_chr[:, -1, :]          # [1, V_chr]
-                log_probs = F.log_softmax(last_logits, dim=-1)[0]  # [V_chr]
-
-                # Take top-k extensions
-                topk_log_probs, topk_tokens = torch.topk(log_probs, beam_size)
-
-                for k in range(beam_size):
-                    tok = topk_tokens[k]
-                    tok_lp = topk_log_probs[k].item()
-
-                    new_tokens = torch.cat([b["tokens"], tok.unsqueeze(0)], dim=0)
-                    new_log_prob = b["log_prob"] + tok_lp
-                    finished = (tok.item() == self.v_chr.EOS)
-
-                    new_beams.append({
-                        "tokens": new_tokens,
-                        "log_prob": new_log_prob,
-                        "finished": finished,
-                    })
-
-            # Prune to top beam_size beams by log_prob
-            new_beams.sort(key=lambda bb: bb["log_prob"], reverse=True)
-            beams = new_beams[:beam_size]
-
-        # After decoding, collect beams
-        all_tokens = [b["tokens"].detach().cpu().numpy() for b in beams]
-        all_scores = [b["log_prob"] for b in beams]
-
-        # Let the caller decide which one is "best"
-        best_idx = int(np.argmax(all_scores))
-        best_tokens = all_tokens[best_idx]
-
-        return best_tokens, all_tokens, all_scores
-
-    def enable_lm(self):
-        self.config["use_lm"] = True
-
-    def disable_lm(self):
-        self.config["use_lm"] = False
     
     def load(self, filepath):
         """
@@ -571,7 +426,7 @@ class BrainToTextDecoder():
 
         return checkpoint
     
-    def save(self, filepath):
+    def save(self, filepath, state_dict_gpu=None):
         """
         Save a CPU-portable checkpoint (parameters and config dict).
         """
@@ -580,16 +435,17 @@ class BrainToTextDecoder():
         filepath.parent.mkdir(parents=True, exist_ok=True)
 
         # Prefer the tracked best_state_dict, fall back to current model weights
-        if self.best_state_dict is not None:
-            state_dict = self.best_state_dict
-        else:
-            state_dict = self.model.state_dict()
+        if state_dict_gpu is None:
+            if self.best_state_dict is not None:
+                state_dict_gpu = self.best_state_dict
+            else:
+                state_dict_gpu = self.model.state_dict()
 
         # Force everything to CPU for maximum portability
-        cpu_state_dict = {k: v.detach().cpu() for k, v in state_dict.items()}
+        state_dict_cpu = {k: v.detach().cpu() for k, v in state_dict_gpu.items()}
 
         checkpoint = {
-            "best_state_dict": cpu_state_dict,
+            "best_state_dict": state_dict_cpu,
             "config": getattr(self, "config", None),
         }
 
@@ -670,15 +526,6 @@ class BrainToTextDecoder():
 
         return loss, loss_chr, loss_pho
     
-    # TODO: Finish coding this
-    def pretrain(self, ds):
-        """
-        """
-
-        pt = Pretraining()
-
-        return
-    
     def fit(self, ds):
         """
         """
@@ -693,7 +540,7 @@ class BrainToTextDecoder():
             valid_indices = np.delete(all_indices, train_indices)
             ds_train = SubsetWithAttrs(ds, train_indices)
             ds_valid = SubsetWithAttrs(ds, valid_indices)
-            loader_valid = DataLoader(ds_valid, batch_size=self.config.get("batch_size"), shuffle=True)
+            loader_valid = DataLoader(ds_valid, batch_size=self.config.get("batch_size"), shuffle=False)
         else:
             ds_train = ds
             ds_valid = None
@@ -710,26 +557,33 @@ class BrainToTextDecoder():
         )
 
         # Initialize optimizer
-        optimizer = Adam(self.model.parameters(), lr=self.config.get("lr"))
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer,
-            mode="min",
-            factor=0.5,
-            patience=5,   # epochs with no val improvement
-        )
+        optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.config["lr"], weight_decay=self.config["weight_decay"])
+
+        # Init LR scheduler
+        n_steps_total = self.config["max_iter"] * len(loader_train)
+        n_steps_warmup = max(1, min(100, int(0.1 * n_steps_total)))
+        def lr_lambda(i_step):
+            if i_step < n_steps_warmup:
+                return (i_step + 1) / n_steps_warmup
+            # cosine to 10% of base LR (adjust as desired)
+            progress = (i_step - n_steps_warmup) / max(1, n_steps_total - n_steps_warmup)
+            cosine = 0.5 * (1 + math.cos(math.pi * progress))
+            return 0.1 + 0.9 * cosine  # min_lr = 0.1 * base_lr
+        scheduler = LambdaLR(optimizer, lr_lambda)
 
         # Loss tracking
         self.loss_train = np.full(self.config.get("max_iter"), np.nan)
         self.loss_valid = np.full(self.config.get("max_iter"), np.nan)
+        self.wer_valid = np.full(self.config.get("max_iter"), np.nan)
 
         #
         n_epochs_without_improvement = 0
         self.best_state_dict = None
-        best_loss_train = np.inf
-        best_loss_valid = np.inf
+        best_wer_valid = np.inf
 
         #
         snapshot_index = 0
+        i_step = 0 # Counter for steps (NOT EPOCHS)
 
         #
         for i_epoch in range(self.config.get("max_iter")):
@@ -749,12 +603,17 @@ class BrainToTextDecoder():
                 # Optimize
                 optimizer.zero_grad()
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                 optimizer.step()
+                scheduler.step()
+
+                #
+                i_step += 1
 
             #
             batch_loss_train /= len(loader_train)
 
-            # Validation
+            # Evaluate loss on the validation dataset
             batch_loss_valid = np.nan
             if self.config.get("early_stopping"):
                 self.model.eval()
@@ -768,58 +627,42 @@ class BrainToTextDecoder():
                         batch_loss_valid += loss.item()
                 batch_loss_valid /= len(loader_valid)
 
-            # Estimate WER (downsample to 3x the batch size to save time)
+            # Estimate WER on a downsampled subset of the validation dataset
             if ds_valid is not None:
-                n_samples = int(3 * self.config.get("batch_size"))
-                if n_samples > len(ds_valid):
-                    n_samples = len(ds_valid)
-                idxs = np.random.choice(np.arange(n_samples), size=n_samples, replace=False)
-                ds_valid_subset = SubsetWithAttrs(ds_valid, idxs)
-                tokens, hypothesis = self.predict(ds_valid_subset, algo="greedy", print_progress=False)
-                reference = [ds_valid_subset.dataset.sentences[i] for i in ds_valid_subset.indices]
+                _, hypothesis = self.predict(ds_valid, algo="greedy", print_progress=False)
+                reference = [ds_valid.dataset.sentences[i] for i in ds_valid.indices]
                 wer_valid = wer(reference, hypothesis)
+                cer_valid = cer(reference, hypothesis)
             else:
                 wer_valid = np.nan
-
-            # Update learning rate
-            if self.config.get("early_stopping") and not np.isnan(batch_loss_valid):
-                scheduler.step(batch_loss_valid)
-            else:
-                scheduler.step(batch_loss_train) 
+                cer_valid = np.nan
             
             # Print out loss values
             self.loss_train[i_epoch] = batch_loss_train
             self.loss_valid[i_epoch] = batch_loss_valid
-            print(f'Epoch {i_epoch + 1} out of {self.config.get("max_iter")}: Training loss = {batch_loss_train:0.6f}, Validation loss = {batch_loss_valid:0.6f}, Validation WER = {wer_valid:.2f}')
+            self.wer_valid[i_epoch] = wer_valid
+            current_lr = optimizer.param_groups[0]["lr"]
+            print(f'Epoch {i_epoch + 1} out of {self.config.get("max_iter")}: Learning rate = {current_lr:.9f}, Loss (train) = {batch_loss_train:0.6f}, Loss (Validation) = {batch_loss_valid:0.6f}, WER = {wer_valid:.3f}, CER = {cer_valid:.3f}')
 
-            # Update best state dict
-            if batch_loss_train < best_loss_train:
+            # Update best state dict using the WER
+            if wer_valid < best_wer_valid:
+                self.best_epoch = i_epoch
                 self.best_state_dict = copy.deepcopy(self.model.state_dict())
-                best_loss_train = batch_loss_train
+                best_wer_valid = wer_valid
+                n_epochs_without_improvement = 0
+            else:
+                n_epochs_without_improvement += 1
 
             # Save snapshot (optional)
             if self.out_dir is not None:
-                if ((i_epoch + 1) % 10) == 0:
+                if ((i_epoch + 1) % 1) == 0:
                     dst = self.out_dir.joinpath("snapshots", f"snapshot-{snapshot_index + 1}.pkl")
-                    self.save(dst)
+                    self.save(dst, state_dict_gpu=self.model.state_dict())
                     snapshot_index += 1
 
-            # Check for early stopping condition (and save best state and epoch)
-            if self.config.get("early_stopping"):
-                if batch_loss_valid < best_loss_valid:
-                    best_loss_valid = batch_loss_valid
-                    self.best_epoch = i_epoch
-                    self.best_state_dict = copy.deepcopy(self.model.state_dict())
-                    n_epochs_without_improvement = 0
-                else:
-                    n_epochs_without_improvement += 1
-            else:
-                if batch_loss_train < best_loss_train:
-                    best_loss_train = batch_loss_train
-                    self.best_epoch = i_epoch
-                    self.best_state_dict = copy.deepcopy(self.model.state_dict())
+            # Check for early stopping condition
             if n_epochs_without_improvement >= self.config.get("tolerance"):
-                print(f"Early stopping condition met: loss has not improved in {self.config.get('tolerance')} epochs")
+                print(f"Early stopping condition met: WER has not improved in {self.config.get('tolerance')} epochs")
                 break
 
         # Save the best snapshot
@@ -829,7 +672,7 @@ class BrainToTextDecoder():
 
         return
     
-    def predict(self, ds, algo="beam", max_tgt_seq_len=128, batch_size=16, check_spelling=True, print_progress=True):
+    def predict(self, ds, algo="beam", max_tgt_seq_len=128, batch_size=16, check_spelling=False, print_progress=True):
         """
         """
 
@@ -842,6 +685,8 @@ class BrainToTextDecoder():
                 print_progress=print_progress
             )
         elif algo == "beam":
+            if self.config.get("use_lm"):
+                self._init_lm()
             tokens, sentences = self._predict_with_beam_seach(
                 ds,
                 max_tgt_seq_len=max_tgt_seq_len,
@@ -858,177 +703,6 @@ class BrainToTextDecoder():
             sentences_normalized.append(normalize_sentence(s))
 
         return tokens, sentences_normalized
-
-    def _predict_with_greedy_decoding(self, ds, max_tgt_seq_len=128, batch_size=16, check_spelling=True, print_progress=True):
-        """
-        Batched greedy decoding
-        """
-
-        # Dataset + DataLoader for batching
-        loader = DataLoader(ds, batch_size=batch_size, shuffle=False)
-
-        #
-        tokens = []
-        sentences = []
-
-        #
-        self.model.eval()
-        special_tokens = [self.v_chr.BOS, self.v_chr.EOS, self.v_chr.PAD]
-        n_batches = len(loader)
-        with torch.no_grad():
-            for i_batch, (_, X_batch, _, _, z_batch, seq_lens_batch) in enumerate(loader):
-               
-                #
-                if print_progress:
-                    print(f"Working on batch {i_batch + 1} out of {n_batches}")
-
-                # Move this batch to the target device
-                X_batch = X_batch.to(device=self.device)
-                z_batch = z_batch.to(device=self.device)
-                seq_lens_batch = seq_lens_batch.to(device=self.device)
-
-                B = X_batch.shape[0]
-
-                # Start-of-sequence tokens
-                y = torch.full(
-                    (B, 1),
-                    self.v_chr.BOS,
-                    dtype=torch.long,
-                    device=self.device,
-                )
-
-                finished = torch.zeros(B, dtype=torch.bool, device=self.device)
-
-                # Greedy decoding for this batch
-                for t in range(max_tgt_seq_len - 1):
-                    logits_pho, logits_chr, _ = self.model(X_batch, None, y, z_batch, seq_lens_batch)
-                    next_token_logits = logits_chr[:, -1, :]
-                    next_token = torch.argmax(next_token_logits, dim=1)
-
-                    # Force EOS for sequences that are already finished
-                    next_token = torch.where(
-                        finished,
-                        torch.full_like(next_token, self.v_chr.EOS),
-                        next_token,
-                    )
-
-                    y = torch.cat([y, next_token.unsqueeze(1)], dim=1)
-
-                    finished = finished | (next_token == self.v_chr.EOS)
-                    if finished.all():
-                        break
-
-                # Ensure fixed length is the same as max_tgt_seq_len
-                if y.shape[1] < max_tgt_seq_len:
-                    pad = torch.full(
-                        (B, max_tgt_seq_len - y.shape[1]),
-                        self.v_chr.PAD,
-                        dtype=torch.long,
-                        device=self.device,
-                    )
-                    y = torch.cat([y, pad], dim=1)
-
-                # Move predictions back to CPU
-                y_detached = y.to(device="cpu")
-
-                # Drop all tokens after the first EOS (set to PAD)
-                for i_seq, tgt_seq in enumerate(y_detached):
-                    indices = torch.where(tgt_seq == self.v_chr.EOS)[0]
-                    if len(indices) == 0:
-                        continue
-                    index = indices[0]
-                    y_detached[i_seq, index + 1 :] = self.v_chr.PAD
-
-                #
-                seqs = y_detached.numpy()
-                tokens.append(seqs)
-
-                # Decode to sentences and spell-check
-                for in_seq in seqs:
-                    mask = np.isin(in_seq, special_tokens)
-                    filtered = in_seq[~mask]
-                    characters = self.v_chr.decode(filtered)
-                    sentence = "".join(characters)
-                    if check_spelling:
-                        sentence = spell_check_sentence(sentence)
-                    sentences.append(sentence)
-
-        # Concatenate all batches along sample axis
-        tokens = np.concatenate(tokens, axis=0)
-
-        return tokens, sentences
-    
-    def _predict_with_beam_seach(self, ds, max_tgt_seq_len=128, batch_size=16, check_spelling=True, print_progress=True):
-
-        loader = DataLoader(ds, batch_size=batch_size, shuffle=False)
-        all_tokens = []
-        all_sentences = []
-
-        self.model.eval()
-        n_batches = len(loader)
-
-        with torch.no_grad():
-            for i_batch, (_, X_batch, _, _, z_batch, seq_lens_batch) in enumerate(loader):
-
-                #
-                if print_progress:
-                    print(f"Working on batch {i_batch + 1} out of {n_batches}")
-
-                X_batch = X_batch.to(self.device)
-                z_batch = z_batch.to(self.device)
-                seq_lens_batch = seq_lens_batch.to(self.device)
-
-                B = X_batch.shape[0]
-
-                for b in range(B):
-                    X_single = X_batch[b]
-                    z_single = z_batch[b]
-                    seq_lens_single = seq_lens_batch[b]
-
-                    # Beam search to get K candidates with decoder scores
-                    best_tokens_dec, beam_tokens, beam_scores = self._run_beam_search(
-                        X_single,
-                        z_single,
-                        seq_lens_single,
-                        max_tgt_seq_len=max_tgt_seq_len,
-                        beam_size=self.config.get("beam_size"),
-                    )
-
-                    # Optionally rescore with LM
-                    if self.config.get("use_lm"):
-                        best_score = -float("inf")
-                        best_tokens = None
-                        best_sentence = None
-
-                        for tok_seq, dec_score in zip(beam_tokens, beam_scores):
-                            raw_sentence = self._decode_char_sequence(tok_seq)
-                            lm_score = self._score_with_lm(raw_sentence)
-                            total_score = (
-                                self.config["alpha_model"] * dec_score +
-                                self.config["beta_lm"] * lm_score
-                            )
-                            if total_score > best_score:
-                                best_score = total_score
-                                best_tokens = tok_seq
-                                best_sentence = raw_sentence
-
-                    # Fallback: just use decoder best
-                    else:
-                        best_tokens = best_tokens_dec
-                        best_sentence = self._decode_char_sequence(best_tokens)
-
-                    # Optional spell check after rescoring
-                    if check_spelling:
-                        best_sentence = spell_check_sentence(best_sentence)
-
-                    #
-                    all_tokens.append(best_tokens)
-                    all_sentences.append(best_sentence)
-
-        #
-        tokens_array = np.array(all_tokens, dtype=object)
-
-        return tokens_array, all_sentences
     
     def score(self, ds, hypothesis=None):
         """
@@ -1046,7 +720,7 @@ class BrainToTextDecoder():
 
         return score
     
-    def generate_submission(self, ds, dst, algo="beam", check_spelling=True):
+    def generate_submission(self, ds, dst, algo="beam", check_spelling=False):
         """
         """
 
@@ -1058,6 +732,5 @@ class BrainToTextDecoder():
         df.to_csv(dst, index=False)
 
         return
-
 
 

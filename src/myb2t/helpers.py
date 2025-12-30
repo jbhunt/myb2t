@@ -99,7 +99,7 @@ def make_default_config():
     config = {
         "d_model": 256,
         "d_ff": 1024,
-        "d_session": 16,
+        "d_session": 32,
         "n_encoder_layers": 6,
         "n_decoder_layers": 3,
         "n_attn_heads": 8,
@@ -108,16 +108,20 @@ def make_default_config():
         "dropout": 0.1,
         "alpha_mtl": 1.0,
         "corruption": 0.1,
-        "max_iter": 30,
+        "max_iter": 100,
         "early_stopping": True,
         "tolerance": 5,
         "validation_fraction": 0.1,
-        "batch_size": 16,
-        "use_lm": False,
+        "batch_size": 32,
+        "use_lm": True,
         "lm_name": "gpt2",
-        "beam_size": 5,
+        "beam_size": 30,
         "alpha_model": 1.0,
-        "beta_lm": 0.3
+        "beta_lm": 0.3,
+        "beta_len": 0.0,
+        "min_len": 3,
+        "cache_lm_scores": True,
+        "weight_decay": 0.01
     }
 
     return config
