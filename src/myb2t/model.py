@@ -546,7 +546,8 @@ class BrainToTextDecoder(BeamSearchMixin, GreedyDecodingMixin):
 
         # Loss functions
         chr_loss_fn = nn.CrossEntropyLoss(
-            ignore_index=self.v_chr.PAD
+            ignore_index=self.v_chr.PAD,
+            label_smoothing=0.1
         )
         pho_loss_fn = nn.CTCLoss(
             blank=self.v_pho.PAD,
