@@ -118,7 +118,7 @@ def make_default_config():
         "corruption": 0.1,
         "early_stopping": True,
         "validation_fraction": 0.1,
-        "patience": 10,
+        "patience": 5,
         "batch_size": 32,
         "weight_decay": 0.003,
 
