@@ -662,6 +662,15 @@ class BrainToTextDecoder(BeamSearchMixin, GreedyDecodingMixin):
             else:
                 wer_valid = np.nan
                 cer_valid = np.nan
+
+            # Update best state dict using the WER
+            if wer_valid < best_wer_valid:
+                self.best_epoch = i_epoch
+                self.best_state_dict = copy.deepcopy(self.model.state_dict())
+                best_wer_valid = wer_valid
+                n_epochs_without_improvement = 0
+            else:
+                n_epochs_without_improvement += 1
             
             # Print out progress report
             self.loss_train[i_epoch] = batch_loss_train
@@ -675,15 +684,6 @@ class BrainToTextDecoder(BeamSearchMixin, GreedyDecodingMixin):
             else:
                 phase = "Cosine decay"
             print(f'Epoch {i_epoch + 1} out of {self.config.get("max_iter")} [{phase}]: Learning rate={current_lr:.9f}, Loss (train)={batch_loss_train:0.3f}, Loss (Validation)={batch_loss_valid:0.3f}, WER={wer_valid:.3f}, CER={cer_valid:.3f}, N epochs without improvement={n_epochs_without_improvement}/{self.config["tolerance"]}')
-
-            # Update best state dict using the WER
-            if wer_valid < best_wer_valid:
-                self.best_epoch = i_epoch
-                self.best_state_dict = copy.deepcopy(self.model.state_dict())
-                best_wer_valid = wer_valid
-                n_epochs_without_improvement = 0
-            else:
-                n_epochs_without_improvement += 1
 
             # Save snapshot (optional)
             if self.out_dir is not None:
