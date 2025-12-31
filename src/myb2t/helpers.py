@@ -105,7 +105,7 @@ def make_default_config():
         "n_attn_heads": 8,
         "lr": 0.00005,
         "max_tgt_seq_len": 128,
-        "dropout": 0.1,
+        "dropout": 0.15,
         "lambda": 0.8, # Balances objectives (higher values emphasizes characters, lower values emphasize phonemes)
         "corruption": 0.15,
         "max_iter": 100,
