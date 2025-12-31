@@ -121,7 +121,10 @@ def make_default_config():
         "beta_len": 0.0,
         "min_len": 3,
         "cache_lm_scores": True,
-        "weight_decay": 0.003
+        "weight_decay": 0.003,
+        "max_warmup_steps": 1000, # Maximum number of steps used in warmup
+        "warmup_fraction": 0.05, # Target fraction of training for warmup
+        "hold_fraction": 0.1 # Fraction of training for holding LR steady (at maximum value)
     }
 
     return config
