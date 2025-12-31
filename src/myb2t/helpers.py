@@ -4,6 +4,7 @@ from spellchecker import SpellChecker
 from torch.utils.data import Dataset
 import re
 import unicodedata
+import pandas as pd
 
 def compute_class_weights(ds, vocab, device):
     from collections import Counter
@@ -97,32 +98,45 @@ def make_default_config():
     """
 
     config = {
+
+        # Model architecture
         "d_model": 384,
         "d_ff": 1536,
         "d_session": 16,
-        "n_encoder_layers": 6,
-        "n_decoder_layers": 5,
+        "n_encoder_layers": 9,
+        "n_decoder_layers": 3,
         "n_attn_heads": 8,
-        "lr": 0.00005,
+
+        # Logistic
         "max_tgt_seq_len": 128,
-        "dropout": 0.15,
+
+        # Weirdos
         "lambda": 0.8, # Balances objectives (higher values emphasizes characters, lower values emphasize phonemes)
-        "corruption": 0.15,
-        "max_iter": 100,
+
+        # Regularization
+        "dropout": 0.15,
+        "corruption": 0.1,
         "early_stopping": True,
-        "tolerance": 10,
         "validation_fraction": 0.1,
+        "patience": 10,
         "batch_size": 32,
+        "weight_decay": 0.003,
+
+        # Re-scoring/ranking hyperparameters
         "use_lm": True,
         "lm_name": "gpt2",
         "beam_size": 10,
-        "alpha": 0.2, # Length penalty
-        "beta": 0.3, #
-        "beta_len": 0.0,
-        "min_len": 3,
+        "min_dec_seq_len": 3,
+        "max_dec_seq_len": 128,
+        "am_weight": 0.2,
+        "lm_weight": 0.3,
+        "length_bonus": 0.0,
         "cache_lm_scores": True,
-        "weight_decay": 0.003,
-        "max_warmup_steps": 1000, # Maximum number of steps used in warmup
+
+        # Learning rate scheduling hyperparameters
+        "max_iter": 100,
+        "lr": 0.00005,
+        "max_warmup_steps": 2000, # Maximum number of steps used in warmup
         "warmup_fraction": 0.05, # Target fraction of training for warmup
         "hold_fraction": 0.1 # Fraction of training for holding LR steady (at maximum value)
     }
@@ -177,5 +191,18 @@ def normalize_sentence(s):
     s = _re_ws.sub(" ", s).strip()
 
     return s
+
+def generate_kaggle_submission(est, ds, dst, algo="beam", check_spelling=False):
+    """
+    """
+
+    tokens, sentences = est.predict(ds, algo=algo, check_spelling=check_spelling)
+    df = pd.DataFrame({
+        "id": list(range(len(sentences))),
+        "text": sentences
+    })
+    df.to_csv(dst, index=False)
+
+    return
 
         

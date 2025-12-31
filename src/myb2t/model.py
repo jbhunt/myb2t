@@ -683,7 +683,7 @@ class BrainToTextDecoder(BeamSearchMixin, GreedyDecodingMixin):
                 phase = "Hold"
             else:
                 phase = "Cosine decay"
-            print(f'Epoch {i_epoch + 1} out of {self.config.get("max_iter")} [{phase}]: Learning rate={current_lr:.9f}, Loss (train)={batch_loss_train:0.3f}, Loss (Validation)={batch_loss_valid:0.3f}, WER={wer_valid:.3f}, CER={cer_valid:.3f}, N epochs without improvement={n_epochs_without_improvement}/{self.config["tolerance"]}')
+            print(f'Epoch {i_epoch + 1} out of {self.config.get("max_iter")} [{phase}]: Learning rate={current_lr:.9f}, Loss (train)={batch_loss_train:0.3f}, Loss (Validation)={batch_loss_valid:0.3f}, WER={wer_valid:.3f}, CER={cer_valid:.3f}, N epochs without improvement={n_epochs_without_improvement}/{self.config["patience"]}')
 
             # Save snapshot (optional)
             if self.out_dir is not None:
@@ -693,7 +693,7 @@ class BrainToTextDecoder(BeamSearchMixin, GreedyDecodingMixin):
                     snapshot_index += 1
 
             # Check for early stopping condition
-            if n_epochs_without_improvement >= self.config.get("tolerance"):
+            if n_epochs_without_improvement >= self.config["patience"]:
                 print(f"Early stopping condition met: WER has not improved in {self.config.get('tolerance')} epochs")
                 break
 
@@ -704,22 +704,20 @@ class BrainToTextDecoder(BeamSearchMixin, GreedyDecodingMixin):
 
         return
     
-    def predict(self, ds, algo="beam", max_tgt_seq_len=128, batch_size=16, check_spelling=False, print_progress=True):
+    def predict(self, ds, algo="beam", batch_size=32, check_spelling=False, print_progress=True):
         """
         """
 
         if algo == "greedy":
             tokens, sentences = self._predict_with_greedy_decoding(
                 ds,
-                max_tgt_seq_len=max_tgt_seq_len,
                 batch_size=batch_size,
                 check_spelling=check_spelling,
                 print_progress=print_progress
             )
         elif algo == "beam":
-            tokens, sentences = self._predict_with_beam_seach(
+            tokens, sentences = self._predict_with_beam_search(
                 ds,
-                max_tgt_seq_len=max_tgt_seq_len,
                 batch_size=batch_size,
                 check_spelling=check_spelling,
                 print_progress=print_progress
@@ -749,18 +747,6 @@ class BrainToTextDecoder(BeamSearchMixin, GreedyDecodingMixin):
         score = wer(reference=reference, hypothesis=hypothesis)
 
         return score
-    
-    def generate_submission(self, ds, dst, algo="beam", check_spelling=False):
-        """
-        """
 
-        tokens, sentences = self.predict(ds, algo=algo, check_spelling=check_spelling)
-        df = pd.DataFrame({
-            "id": list(range(len(sentences))),
-            "text": sentences
-        })
-        df.to_csv(dst, index=False)
-
-        return
 
 
