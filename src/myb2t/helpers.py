@@ -101,13 +101,13 @@ def make_default_config():
         "d_ff": 1536,
         "d_session": 16,
         "n_encoder_layers": 6,
-        "n_decoder_layers": 3,
+        "n_decoder_layers": 5,
         "n_attn_heads": 8,
-        "lr": 0.00007,
+        "lr": 0.00005,
         "max_tgt_seq_len": 128,
         "dropout": 0.1,
-        "lambda": 1.0, # Balances objectives (higher values emphasizes characters, lower values emphasize phonemes)
-        "corruption": 0.1,
+        "lambda": 0.8, # Balances objectives (higher values emphasizes characters, lower values emphasize phonemes)
+        "corruption": 0.15,
         "max_iter": 100,
         "early_stopping": True,
         "tolerance": 10,
@@ -116,7 +116,7 @@ def make_default_config():
         "use_lm": True,
         "lm_name": "gpt2",
         "beam_size": 15,
-        "alpha": 1.0, # Length penalty
+        "alpha": 0.2, # Length penalty
         "beta": 0.3, #
         "beta_len": 0.0,
         "min_len": 3,

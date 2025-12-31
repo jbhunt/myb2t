@@ -578,7 +578,7 @@ class BrainToTextDecoder(BeamSearchMixin, GreedyDecodingMixin):
         # Init LR scheduler
         n_steps_total = self.config["max_iter"] * len(loader_train)
         n_steps_warmup = max(1, min(1500, int(0.05 * n_steps_total)))
-        n_steps_hold = int(0.15 * n_steps_total)
+        n_steps_hold = int(0.1 * n_steps_total)
         def lr_lambda(step):
             # Warmup
             if step < n_steps_warmup:
