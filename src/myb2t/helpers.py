@@ -107,11 +107,11 @@ def make_default_config():
         "n_decoder_layers": 3,
         "n_attn_heads": 8,
 
-        # Logistic
+        # Logistics
         "max_tgt_seq_len": 128,
 
         # Weirdos
-        "lambda": 0.8, # Balances objectives (higher values emphasizes characters, lower values emphasize phonemes)
+        "alpha": 0.8, # Balances objectives (higher values emphasizes characters, lower values emphasize phonemes)
 
         # Regularization
         "dropout": 0.15,

@@ -536,8 +536,8 @@ class BrainToTextDecoder(BeamSearchMixin, GreedyDecodingMixin):
         )
 
         #
-        lambda_ = self.config.get("lambda")
-        loss = lambda_ * loss_chr + (1 - lambda_) * loss_pho
+        alpha_ = self.config.get("alpha")
+        loss = alpha_ * loss_chr + (1 - alpha_) * loss_pho
 
         return loss, loss_chr, loss_pho
     
