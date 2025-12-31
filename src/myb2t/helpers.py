@@ -115,7 +115,7 @@ def make_default_config():
         "batch_size": 32,
         "use_lm": True,
         "lm_name": "gpt2",
-        "beam_size": 15,
+        "beam_size": 10,
         "alpha": 0.2, # Length penalty
         "beta": 0.3, #
         "beta_len": 0.0,
