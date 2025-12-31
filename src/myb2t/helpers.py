@@ -100,11 +100,11 @@ def make_default_config():
     config = {
 
         # Model architecture
-        "d_model": 384,
-        "d_ff": 1536,
+        "d_model": 512,
+        "d_ff": 2048,
         "d_session": 16,
-        "n_encoder_layers": 9,
-        "n_decoder_layers": 3,
+        "n_encoder_layers": 4,
+        "n_decoder_layers": 2,
         "n_attn_heads": 8,
 
         # Logistics
