@@ -13,5 +13,5 @@ The first three subplots show sequences of character or phoneme tokens for 30 ex
 ## Model architecture
 TODO: Create a visualization/figure that describes all the major components of the model's architecture.
 
-## Balancing multiple objectives
-One of the most important features of this model is that it optimizes multiple (2) objective functions. It optimizes CE loss for characters (primary objective) and CTC loss for phonemes (auxillary objective) with the idea being that optimizing both objectives will improve performance on the primary objective.
+## Multi-task learning
+One of the most important features of this model is that it optimizes multiple (2) objective functions. It minimizes CE loss for characters (primary objective) and CTC loss for phonemes (auxillary objective) with the idea being that learning an auxillary task (predict phoneme sequences) in parallel will provide performance gains for the primary task (predict character sequences).
