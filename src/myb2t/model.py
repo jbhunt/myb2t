@@ -541,9 +541,23 @@ class BrainToTextDecoder(BeamSearchMixin, GreedyDecodingMixin):
 
         return loss, loss_chr, loss_pho
     
-    def fit(self, ds):
+    def fit(self, ds, new_model=False):
         """
         """
+
+        #
+        if new_model:
+            self.model = BrainToCharacterTransformer(
+                d_model=self.config["d_model"],
+                dim_ff=self.config["d_ff"],
+                d_session=self.config["d_session"],
+                n_encoder_layers=self.config["n_encoder_layers"],
+                n_decoder_layers=self.config["n_decoder_layers"],
+                n_heads=self.config["n_attn_heads"],
+                dropout=self.config["dropout"],
+                phoneme_vocab_size=self.v_pho.size,
+                character_vocab_size=self.v_chr.size,
+            ).to(self.device)
 
         # Dataset(s)
         if self.config.get("early_stopping"):
@@ -694,7 +708,7 @@ class BrainToTextDecoder(BeamSearchMixin, GreedyDecodingMixin):
 
             # Check for early stopping condition
             if n_epochs_without_improvement >= self.config["patience"]:
-                print(f"Early stopping condition met: WER has not improved in {self.config.get('tolerance')} epochs")
+                print(f"Early stopping condition met: WER has not improved in {self.config.get('patience')} epochs")
                 break
 
         # Save the best snapshot

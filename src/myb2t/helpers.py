@@ -137,8 +137,8 @@ def make_default_config():
         "max_iter": 100,
         "lr": 0.00005,
         "max_warmup_steps": 2000, # Maximum number of steps used in warmup
-        "warmup_fraction": 0.05, # Target fraction of training for warmup
-        "hold_fraction": 0.1 # Fraction of training for holding LR steady (at maximum value)
+        "warmup_fraction": 0.1, # Target fraction of training for warmup
+        "hold_fraction": 0.05 # Fraction of training for holding LR steady (at maximum value)
     }
 
     return config

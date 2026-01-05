@@ -3,9 +3,7 @@ import torch
 from torch.utils.data import DataLoader
 import numpy as np
 from transformers import GPT2Tokenizer, GPT2LMHeadModel
-
 from myb2t.helpers import normalize_sentence, spell_check_sentence
-
 
 class BeamSearchMixin:
     """

@@ -9,3 +9,9 @@ For convenience, I've created PyTorch Dataset objects for the Brain-to-text (B2T
 ![](data/imgs/datasets.png)
 
 The first three subplots show sequences of character or phoneme tokens for 30 example sequences (y-axis). Color indicates the identity of the token (blue represents the pad token). The last two subplots show sequences of either multi-unit spiking (second-to-last) or LFP activity (far-right) across 256 recording channels (y-axis) for a single example trial. Color represents the magnitude of neural activity.
+
+## Model architecture
+TODO: Create a visualization/figure that describes all the major components of the model's architecture.
+
+## Balancing multiple objectives
+One of the most important features of this model is that it optimizes multiple (2) objective functions. It optimizes CE loss for characters (primary objective) and CTC loss for phonemes (auxillary objective) with the idea being that optimizing both objectives will improve performance on the primary objective.
