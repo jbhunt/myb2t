@@ -707,9 +707,10 @@ class BrainToTextDecoder(BeamSearchMixin, GreedyDecodingMixin):
                     snapshot_index += 1
 
             # Check for early stopping condition
-            if n_epochs_without_improvement >= self.config["patience"]:
-                print(f"Early stopping condition met: WER has not improved in {self.config.get('patience')} epochs")
-                break
+            if self.config["early_stopping"]:
+                if n_epochs_without_improvement >= self.config["patience"]:
+                    print(f"Early stopping condition met: WER has not improved in {self.config.get('patience')} epochs")
+                    break
 
         # Save the best snapshot
         if self.out_dir is not None:
