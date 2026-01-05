@@ -746,7 +746,7 @@ class BrainToTextDecoder(BeamSearchMixin, GreedyDecodingMixin):
 
         return tokens, sentences_normalized
     
-    def score(self, ds, hypothesis=None):
+    def score(self, ds, hypothesis=None, print_progress=True):
         """
         Score prediction using the word error rate metric
         """
@@ -757,7 +757,7 @@ class BrainToTextDecoder(BeamSearchMixin, GreedyDecodingMixin):
             sentence = self.v_chr.translate([r_dec])[0]
             reference.append(sentence)
         if hypothesis is None:
-            tokens, hypothesis = self.predict(ds)
+            tokens, hypothesis = self.predict(ds, print_progress=print_progress)
         score = wer(reference=reference, hypothesis=hypothesis)
 
         return score

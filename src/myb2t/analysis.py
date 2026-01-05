@@ -4,6 +4,7 @@ import numpy as np
 
 def tune_alpha(
     ds_train,
+    config=None,
     alpha=[0, 0.2, 0.4, 0.6, 0.8, 1.0],
     max_iter=50,
     lr=0.00005,
@@ -18,9 +19,11 @@ def tune_alpha(
         raise Exception("N samples must be less than 2x the size of the dataset")
 
     #
-    config = make_default_config()
+    if config is None:
+        config = make_default_config()
     config["max_iter"] = max_iter
     config["lr"] = lr # Bump up the lr just a bit for a shorter training session
+    config["early_stopping"] = False
     est = BrainToTextDecoder(config=config, out_dir=None)
 
     #
@@ -39,7 +42,7 @@ def tune_alpha(
         for i_a, a in enumerate(alpha):
             est.config["alpha"] = a
             est.fit(ds_train_small, new_model=True)
-            wer = est.score(ds_test_small)
+            wer = est.score(ds_test_small, print_progress=False)
             scores[i_run, i_a] = wer
 
     return alpha, scores
