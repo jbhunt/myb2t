@@ -25,8 +25,8 @@ def run_mtl_experiment(
 
     #
     n_all = int(round(subset_size * len(ds)))
-    n_train = int(round(train_size * len(ds)))
-    n_test  = len(ds) - n_train
+    n_train = int(round(train_size * n_all))
+    n_test  = n_all - n_train
     if max_samples is not None:
         n_train = min(n_train, max_samples)
         n_test  = min(n_test,  max_samples)
