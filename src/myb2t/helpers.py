@@ -5,6 +5,8 @@ from torch.utils.data import Dataset
 import re
 import unicodedata
 import pandas as pd
+import random
+import numpy as np
 
 def compute_class_weights(ds, vocab, device):
     from collections import Counter
@@ -205,4 +207,22 @@ def generate_kaggle_submission(est, ds, dst, algo="beam", check_spelling=False):
 
     return
 
+def seed_everything(seed):
+    """
+    """
+
+    # Python RNG
+    random.seed(seed)
+
+    # NumPy RNG
+    np.random.seed(seed)
+
+    # PyTorch RNGs
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+
+    # Make CuDNN deterministic
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
         
+    return

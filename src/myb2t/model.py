@@ -343,7 +343,8 @@ class BrainToTextDecoder(BeamSearchMixin, GreedyDecodingMixin):
         config,
         out_dir=None,
         device=None,
-        snapshot=None
+        snapshot=None,
+        verbosity=1
         ):
         """
         """
@@ -360,22 +361,30 @@ class BrainToTextDecoder(BeamSearchMixin, GreedyDecodingMixin):
         self.v_pho = PhonemeVocabulary()
         self.v_chr = CharacterVocabulary()
 
-        # 
+        # Model config dict
         self.config = config
-        if self.config is None or len(self.config) == 0:
-            self.model = None
-        else:
-            self.model = BrainToCharacterTransformer(
-                d_model=config["d_model"],
-                dim_ff=config["d_ff"],
-                d_session=config["d_session"],
-                n_encoder_layers=config["n_encoder_layers"],
-                n_decoder_layers=config["n_decoder_layers"],
-                n_heads=config["n_attn_heads"],
-                dropout=config["dropout"],
-                phoneme_vocab_size=self.v_pho.size,
-                character_vocab_size=self.v_chr.size,
-            ).to(self.device)
+
+        # Initialize model
+        self.model = BrainToCharacterTransformer(
+            d_model=self.config["d_model"],
+            dim_ff=self.config["d_ff"],
+            d_session=self.config["d_session"],
+            n_encoder_layers=self.config["n_encoder_layers"],
+            n_decoder_layers=self.config["n_decoder_layers"],
+            n_heads=self.config["n_attn_heads"],
+            dropout=self.config["dropout"],
+            phoneme_vocab_size=self.v_pho.size,
+            character_vocab_size=self.v_chr.size,
+        ).to(self.device)
+        self._init_model_state_dict = self._init_model_state_dict = {k: v.detach().cpu().clone() for k, v in self.model.state_dict().items()}
+
+        # Initialize optimizer
+        self.optim = torch.optim.AdamW(
+            self.model.parameters(),
+            lr=self.config["lr"],
+            weight_decay=self.config["weight_decay"]
+        )
+        self._init_optim_state_dict = copy.deepcopy(self.optim.state_dict())
 
         #
         self.out_dir = out_dir
@@ -396,6 +405,23 @@ class BrainToTextDecoder(BeamSearchMixin, GreedyDecodingMixin):
         #
         if snapshot is not None:
             self.load(snapshot)
+
+        #
+        self.verbosity = verbosity
+
+        return
+    
+    def _reset(self):
+        """
+        """
+
+        self.model.load_state_dict(self._init_model_state_dict)
+        self.optim = torch.optim.AdamW(
+            self.model.parameters(),
+            lr=self.config["lr"],
+            weight_decay=self.config["weight_decay"]
+        )
+        self.optim.load_state_dict(self._init_optim_state_dict)  
 
         return
     
@@ -422,24 +448,14 @@ class BrainToTextDecoder(BeamSearchMixin, GreedyDecodingMixin):
 
         #
         if self.model is None:
-            self.model = BrainToCharacterTransformer(
-                d_model=self.config["d_model"],
-                dim_ff=self.config["d_ff"],
-                d_session=self.config["d_session"],
-                n_encoder_layers=self.config["n_encoder_layers"],
-                n_decoder_layers=self.config["n_decoder_layers"],
-                n_heads=self.config["n_attn_heads"],
-                dropout=self.config["dropout"],
-                phoneme_vocab_size=self.v_pho.size,
-                character_vocab_size=self.v_chr.size,
-            ).to(self.device)
+            self._init_model()
         self.model.load_state_dict(state_dict)
 
         # Decide device and move model there
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.model.to(self.device)
 
-        # Keep a reference to best_state_dict if you want
+        # Keep a reference to best_state_dict
         self.best_state_dict = state_dict
 
         return checkpoint
@@ -541,23 +557,13 @@ class BrainToTextDecoder(BeamSearchMixin, GreedyDecodingMixin):
 
         return loss, loss_chr, loss_pho
     
-    def fit(self, ds, new_model=False):
+    def fit(self, ds, reset=True):
         """
         """
 
-        #
-        if new_model:
-            self.model = BrainToCharacterTransformer(
-                d_model=self.config["d_model"],
-                dim_ff=self.config["d_ff"],
-                d_session=self.config["d_session"],
-                n_encoder_layers=self.config["n_encoder_layers"],
-                n_decoder_layers=self.config["n_decoder_layers"],
-                n_heads=self.config["n_attn_heads"],
-                dropout=self.config["dropout"],
-                phoneme_vocab_size=self.v_pho.size,
-                character_vocab_size=self.v_chr.size,
-            ).to(self.device)
+        # Restore initial state for the model and optimizer
+        if reset:
+            self._reset()
 
         # Dataset(s)
         if self.config.get("early_stopping"):
@@ -586,9 +592,6 @@ class BrainToTextDecoder(BeamSearchMixin, GreedyDecodingMixin):
             zero_infinity=True,
         )
 
-        # Initialize optimizer
-        optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.config["lr"], weight_decay=self.config["weight_decay"])
-
         # Init LR scheduler
         n_steps_total = self.config["max_iter"] * len(loader_train)
         n_steps_warmup = max(1, min(self.config["max_warmup_steps"], int(self.config["warmup_fraction"] * n_steps_total)))
@@ -609,7 +612,7 @@ class BrainToTextDecoder(BeamSearchMixin, GreedyDecodingMixin):
 
             cosine = 0.5 * (1 + math.cos(math.pi * progress))
             return 0.1 + 0.9 * cosine   # floor at 10% of base LR
-        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+        scheduler = torch.optim.lr_scheduler.LambdaLR(self.optim, lr_lambda)
 
         # Loss tracking
         self.loss_train = np.full(self.config.get("max_iter"), np.nan)
@@ -641,10 +644,10 @@ class BrainToTextDecoder(BeamSearchMixin, GreedyDecodingMixin):
                 batch_loss_train += loss.item()
 
                 # Optimize
-                optimizer.zero_grad()
+                self.optim.zero_grad()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-                optimizer.step()
+                self.optim.step()
                 scheduler.step()
 
                 #
@@ -678,7 +681,9 @@ class BrainToTextDecoder(BeamSearchMixin, GreedyDecodingMixin):
                 cer_valid = np.nan
 
             # Update best state dict using the WER
-            if wer_valid < best_wer_valid:
+            if np.isnan(wer_valid):
+                pass
+            elif wer_valid < best_wer_valid:
                 self.best_epoch = i_epoch
                 self.best_state_dict = copy.deepcopy(self.model.state_dict())
                 best_wer_valid = wer_valid
@@ -690,14 +695,15 @@ class BrainToTextDecoder(BeamSearchMixin, GreedyDecodingMixin):
             self.loss_train[i_epoch] = batch_loss_train
             self.loss_valid[i_epoch] = batch_loss_valid
             self.wer_valid[i_epoch] = wer_valid
-            current_lr = optimizer.param_groups[0]["lr"]
+            current_lr = self.optim.param_groups[0]["lr"]
             if i_step < n_steps_warmup:
                 phase = "Warmup"
             elif i_step < n_steps_warmup + n_steps_hold:
                 phase = "Hold"
             else:
                 phase = "Cosine decay"
-            print(f'Epoch {i_epoch + 1} out of {self.config.get("max_iter")} [{phase}]: Learning rate={current_lr:.9f}, Loss (train)={batch_loss_train:0.3f}, Loss (Validation)={batch_loss_valid:0.3f}, WER={wer_valid:.3f}, CER={cer_valid:.3f}, N epochs without improvement={n_epochs_without_improvement}/{self.config["patience"]}')
+            if self.verbosity > 0:
+                print(f'Epoch {i_epoch + 1} out of {self.config.get("max_iter")} [{phase}]: Learning rate={current_lr:.9f}, Loss (train)={batch_loss_train:0.3f}, Loss (Validation)={batch_loss_valid:0.3f}, WER={wer_valid:.3f}, CER={cer_valid:.3f}, N epochs without improvement={n_epochs_without_improvement}/{self.config["patience"]}')
 
             # Save snapshot (optional)
             if self.out_dir is not None:
@@ -709,7 +715,8 @@ class BrainToTextDecoder(BeamSearchMixin, GreedyDecodingMixin):
             # Check for early stopping condition
             if self.config["early_stopping"]:
                 if n_epochs_without_improvement >= self.config["patience"]:
-                    print(f"Early stopping condition met: WER has not improved in {self.config.get('patience')} epochs")
+                    if self.verbosity > 1:
+                        print(f"Early stopping condition met: WER has not improved in {self.config.get('patience')} epochs")
                     break
 
         # Save the best snapshot

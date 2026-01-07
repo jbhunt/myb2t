@@ -1,13 +1,11 @@
 from myb2t.model import BrainToTextDecoder
-from myb2t.helpers import make_default_config, SubsetWithAttrs
+from myb2t.helpers import make_default_config, SubsetWithAttrs, seed_everything
 import numpy as np
 
-def tune_alpha(
+def run_mtl_experiment(
     ds_train,
-    config=None,
-    alpha=[0, 0.2, 0.4, 0.6, 0.8, 1.0],
-    max_iter=50,
-    lr=0.00005,
+    config,
+    alphas=[0, 0.5, 1.0],
     n_samples=300,
     n_runs=1
     ):
@@ -21,10 +19,9 @@ def tune_alpha(
     #
     if config is None:
         config = make_default_config()
-    config["max_iter"] = max_iter
-    config["lr"] = lr # Bump up the lr just a bit for a shorter training session
+
+    # Force early stopping to be false
     config["early_stopping"] = False
-    est = BrainToTextDecoder(config=config, out_dir=None)
 
     #
     all_idxs = np.arange(len(ds_train))
@@ -35,15 +32,15 @@ def tune_alpha(
     ds_test_small = SubsetWithAttrs(ds_train, test_idxs)
 
     #
-    scores = np.full([n_runs, len(alpha)], np.nan)
-
-    #
-    for i_run in range(n_runs):
-        for i_a, a in enumerate(alpha):
-            est.config["alpha"] = a
-            est.fit(ds_train_small, new_model=True)
+    scores = np.full([n_runs, len(alphas)], np.nan)
+    seeds = np.arange(n_runs)
+    for i, s in enumerate(seeds):
+        seed_everything(s)
+        est = BrainToTextDecoder(config=config, out_dir=None, verbosity=0)
+        for j, a in enumerate(alphas):
+            est.fit(ds_train_small, reset=True)
             wer = est.score(ds_test_small, print_progress=False)
-            scores[i_run, i_a] = wer
+            scores[i, j] = wer
 
-    return alpha, scores
+    return alphas, scores
     
