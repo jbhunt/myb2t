@@ -34,13 +34,16 @@ def run_mtl_experiment(
     #
     scores = np.full([n_runs, len(alphas)], np.nan)
     seeds = np.arange(n_runs)
+    n_sessions = len(alphas * n_runs)
     for i, s in enumerate(seeds):
+        print(f"Running session {i + 1} out of {n_sessions}")
         seed_everything(s)
         est = BrainToTextDecoder(config=config, out_dir=None, verbosity=0)
         for j, a in enumerate(alphas):
             est.fit(ds_train_small, reset=True)
             wer = est.score(ds_test_small, print_progress=False)
             scores[i, j] = wer
+    print("All done!")
 
     return alphas, scores
     
