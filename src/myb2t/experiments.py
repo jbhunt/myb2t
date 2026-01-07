@@ -9,7 +9,6 @@ def run_mtl_experiment(
     alphas=[0, 0.5, 1.0],
     subset_size=0.3,
     train_size=0.8,
-    max_samples=300,
     n_runs=1,
     split_seed=42
     ):
@@ -20,16 +19,13 @@ def run_mtl_experiment(
     base_config = copy.deepcopy(config)
     base_config["early_stopping"] = False
 
-    #
+    # Seed NumpPy's RNG so that I can reproduce/fix the train test split
     rng = np.random.default_rng(split_seed)
 
-    #
+    # Compute the number of samples in each split
     n_all = int(round(subset_size * len(ds)))
     n_train = int(round(train_size * n_all))
     n_test  = n_all - n_train
-    if max_samples is not None:
-        n_train = min(n_train, max_samples)
-        n_test  = min(n_test,  max_samples)
 
     # Create training dataset
     all_idxs = np.arange(len(ds))
