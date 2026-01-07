@@ -47,9 +47,8 @@ def run_mtl_experiment(
         est = BrainToTextDecoder(config=config, out_dir=None, verbosity=0)
         for j, a in enumerate(alphas):
             est.config["alpha"] = a
-            # est.fit(ds_train, reset=True)
-            # wer, cer = est.score(ds_test, print_progress=False)
-            wer, cer = np.nan, np.nan
+            est.fit(ds_train, reset=True)
+            wer, cer = est.score(ds_test, print_progress=False)
             scores[i, j, 0] = wer
             scores[i, j, 1] = cer
     print("All done!")
