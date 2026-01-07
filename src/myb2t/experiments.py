@@ -39,7 +39,7 @@ def run_mtl_experiment(
 
     #
     scores = np.full([n_runs, len(alphas), 2], np.nan)
-    seeds = np.arange(n_runs)
+    seeds = [i + 1 for i in range(n_runs)]
     n_sessions = len(alphas) * n_runs
     for i, s in enumerate(seeds):
         print(f"Running session {i + 1} out of {n_sessions}")
@@ -47,8 +47,9 @@ def run_mtl_experiment(
         est = BrainToTextDecoder(config=config, out_dir=None, verbosity=0)
         for j, a in enumerate(alphas):
             est.config["alpha"] = a
-            est.fit(ds_train, reset=True)
-            wer, cer = est.score(ds_test, print_progress=False)
+            # est.fit(ds_train, reset=True)
+            # wer, cer = est.score(ds_test, print_progress=False)
+            wer, cer = np.nan, np.nan
             scores[i, j, 0] = wer
             scores[i, j, 1] = cer
     print("All done!")
