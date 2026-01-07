@@ -766,9 +766,10 @@ class BrainToTextDecoder(BeamSearchMixin, GreedyDecodingMixin):
             reference.append(sentence)
         if hypothesis is None:
             tokens, hypothesis = self.predict(ds, print_progress=print_progress)
-        score = wer(reference=reference, hypothesis=hypothesis)
+        wer_ = wer(reference=reference, hypothesis=hypothesis)
+        cer_ = cer(reference, hypothesis=hypothesis)
 
-        return score
+        return wer_, cer_
 
 
 
