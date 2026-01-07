@@ -7,6 +7,7 @@ def run_mtl_experiment(
     ds,
     config,
     alphas=[0, 0.5, 1.0],
+    subset_size=0.3,
     train_size=0.8,
     max_samples=300,
     n_runs=1,
@@ -23,6 +24,7 @@ def run_mtl_experiment(
     rng = np.random.default_rng(split_seed)
 
     #
+    n_all = int(round(subset_size * len(ds)))
     n_train = int(round(train_size * len(ds)))
     n_test  = len(ds) - n_train
     if max_samples is not None:
