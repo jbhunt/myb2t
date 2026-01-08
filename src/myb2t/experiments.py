@@ -55,21 +55,21 @@ def run_mtl_experiment(
             scores[i, j, 0] = wer
             scores[i, j, 1] = cer
             i_session += 1
-
-    #
     print("All done!")
+
+    # Package results into a table
+    n_alphas = len(alphas)
+    df = pl.DataFrame({
+        "run_index": np.repeat(np.arange(n_runs), n_alphas * 2),
+        "run_seed":  np.repeat(np.array(run_seeds), n_alphas * 2),  # optional
+        "alpha":     np.tile(np.repeat(np.array(alphas), 2), n_runs),
+        "metric":    np.tile(np.array(["wer", "cer"]), n_runs * n_alphas),
+        "score":     scores.reshape(-1),
+    })
 
     # Save the scores to a table
     if dst is not None:
-        n_alphas = len(alphas)
-        df = pl.DataFrame({
-            "run_index": np.repeat(np.arange(n_runs), n_alphas * 2),
-            "run_seed":  np.repeat(np.array(run_seeds), n_alphas * 2),  # optional
-            "alpha":     np.tile(np.repeat(np.array(alphas), 2), n_runs),
-            "metric":    np.tile(np.array(["wer", "cer"]), n_runs * n_alphas),
-            "score":     scores.reshape(-1),
-        })
         df.write_csv(dst)
 
-    return alphas, scores
+    return alphas, scores, df
     
