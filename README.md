@@ -33,7 +33,7 @@ The model is fundamentally a conditional seq2seq transformer and can be broken d
         - character sequence head
 
 ## FiLM
-One of the most important features of this model is the use of Feature-wise Linear Modulation (FiLM, [Perez et al., 2018](https://arxiv.org/abs/1709.07871)) to adapt neural inputs based on session-level context. FiLM applies a session-dependent affine transformation to the inputs, allowing the model to compensate for day-to-day variability in neural signals while preserving task-relevant information. Rather than conditioning directly on a session ID (i.e., session embedding), the modulation parameters are derived from summary statistics of the neural data, enabling generalization to previously unseen recording sessions, or at least that's the idea.
+One of the most important features of this model is the use of Feature-wise Linear Modulation (FiLM, [Perez et al., 2018](https://arxiv.org/abs/1709.07871)) to adapt neural inputs based on session-level context. FiLM applies a session-dependent affine transformation to the inputs, allowing the model to compensate for day-to-day variability in neural signals while preserving task-relevant information. Rather than conditioning directly on a session ID, the modulation parameters are derived from summary statistics of the neural data, enabling generalization to previously unseen recording sessions, or at least that's the idea.
 
 TODO: Implement a FiLM ablation experiment to verify that session conditioning is benefiting performance.
 
