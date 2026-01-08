@@ -32,9 +32,16 @@ The model is fundamentally a conditional seq2seq transformer and can be broken d
         - phoneme sequence head (operates directly on the encoder output)
         - character sequence head
 
+## FiLM
+One of the most important features of this model is the use of Feature-wise Linear Modulation (FiLM, [Perez et al., 2018](https://arxiv.org/abs/1709.07871)) to adapt neural inputs based on session-level context. FiLM applies a session-dependent affine transformation to the inputs, allowing the model to compensate for day-to-day variability in neural signals while preserving task-relevant information. Rather than conditioning directly on a session ID (i.e., session embedding), the modulation parameters are derived from summary statistics of the neural data, enabling generalization to previously unseen recording sessions, or at least that's the idea.
+
+TODO: Implement a FiLM ablation experiment to verify that session conditioning is benefiting performance.
+
 ## Multi-task learning
-One of the most important features of this model is that it optimizes multiple (2) objective functions. It minimizes CE loss for characters (primary objective) and CTC loss for phonemes (auxillary objective) with the idea being that learning an auxillary task in parallel will improve performance on the primary task ([Senner & Koltun, 2018](https://arxiv.org/abs/1810.04650v2)). The relative contribution of each objective can be tuned with the $\alpha$ parameter which scales the individual losses using this formula:
+Another important feature of this model is that it optimizes multiple (2) objective functions. It minimizes CE loss for characters (primary task) and CTC loss for phonemes (auxillary task) with the idea being that learning an auxillary task in parallel will improve performance on the primary task ([Senner & Koltun, 2018](https://arxiv.org/abs/1810.04650v2)). The relative contribution of each objective can be tuned with the $\alpha$ parameter which scales each type of loss using this formula:
 ```math
 L = \alpha * L_{Char.} + (1 - \alpha) * L_{Phoneme}
 ```
 For example, setting $\alpha$=1.0 will completely disregard CTC loss computed over the predicted phoneme sequences, and conversely, setting $\alpha$=0.0 will completely CE loss computed over the predicted character sequences.
+
+TODO: Implement an experiment that evaluates test performance over a range of $\alpha$ values averaging over multiple runs with paired random seeds.
