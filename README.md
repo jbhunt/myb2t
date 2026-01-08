@@ -5,7 +5,9 @@ This is a repository for my submission to the [2025 Brain-to-Text Kaggle competi
 
 ## Relative performance
 My transformer was able to acheive a word error rate (WER) of ~0.32 on a held-out test dataset. You can see how this compares to other submissions in the histogram below:
+
 ![](data/imgs/wer_dist.png)
+
 This histogram shows the distribution of WER computed on a test dataset for all final submissions (1 submission per user). I clipped the WER at 1.5 for visualization, and my submission is indicated with the blue dotted vertical line. Interestingly, it seems WER is multimodally distributed with ~4 distinct peaks in density at 0.07, 0.21, 0.39, and 1.0.
  
 ## Datasets
