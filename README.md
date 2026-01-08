@@ -4,7 +4,7 @@
 This is a repository for my submission to the [2025 Brain-to-Text Kaggle competition](https://www.kaggle.com/competitions/brain-to-text-25). The objective of this competition is to create a model to decode intended/attempted speech in patients with ALS or other severe speech disorders using intracranial recordings of neural activity and transcriptions of phoneme and character sequences. For my submission, I implemented a muli-task learning (MTL) encoder-decoder transformer that uses a character-level language model conditioned on the neural activity to predict target phoneme and character sequences. The language model component was pre-trained using a subset of the the English OPUS (OpenSubtitles) corpus.
 
 ## Relative performance
-My transformer was able to acheive a word error rate (WER) of ~0.32 on a held-out test dataset. You can see how this compares to other submissions in the histogram below:
+My transformer was able to acheive a word error rate (WER) of ~0.32 on a held-out test dataset putting me in the 26th percentile of WER. You can see how this compares to other submissions in the histogram below:
 
 ![](data/imgs/wer_dist.png)
 
