@@ -2,6 +2,7 @@ from myb2t.model import BrainToTextDecoder
 from myb2t.helpers import make_default_config, SubsetWithAttrs, seed_everything
 import numpy as np
 import copy
+import polars as pl
 
 def run_mtl_experiment(
     ds,
@@ -9,8 +10,9 @@ def run_mtl_experiment(
     alphas=[0, 0.5, 1.0],
     subset_size=0.3,
     train_size=0.8,
-    n_runs=1,
-    split_seed=42
+    split_seed=42,
+    run_seeds=[1,],
+    dst=None
     ):
     """
     """
@@ -33,16 +35,16 @@ def run_mtl_experiment(
     ds_train = SubsetWithAttrs(ds, train_idxs)
 
     # Create test dataset
-    leftover_idxs = np.setdiff1d(all_idxs, train_idxs, assume_unique=False)
-    test_idxs = np.random.choice(leftover_idxs, size=n_test, replace=False)
+    leftover_idxs = np.setdiff1d(all_idxs, train_idxs)
+    test_idxs = rng.choice(leftover_idxs, size=n_test, replace=False)
     ds_test = SubsetWithAttrs(ds, test_idxs)
 
     #
+    n_runs = len(run_seeds)
     scores = np.full([n_runs, len(alphas), 2], np.nan)
-    seeds = [i + 1 for i in range(n_runs)]
     n_sessions = len(alphas) * n_runs
     i_session = 0
-    for i, s in enumerate(seeds):
+    for i, s in enumerate(run_seeds):
         seed_everything(s)
         est = BrainToTextDecoder(config=config, out_dir=None, verbosity=0)
         for j, a in enumerate(alphas):
@@ -53,7 +55,21 @@ def run_mtl_experiment(
             scores[i, j, 0] = wer
             scores[i, j, 1] = cer
             i_session += 1
+
+    #
     print("All done!")
+
+    # Save the scores to a table
+    if dst is not None:
+        n_alphas = len(alphas)
+        df = pl.DataFrame({
+            "run_index": np.repeat(np.arange(n_runs), n_alphas * 2),
+            "run_seed":  np.repeat(np.array(run_seeds), n_alphas * 2),  # optional
+            "alpha":     np.tile(np.repeat(np.array(alphas), 2), n_runs),
+            "metric":    np.tile(np.array(["wer", "cer"]), n_runs * n_alphas),
+            "score":     scores.reshape(-1),
+        })
+        df.write_csv(dst)
 
     return alphas, scores
     
