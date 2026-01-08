@@ -1,7 +1,12 @@
 # myb2t
 
 ## Overview
-This is a repository for my submission to the [2025 Brain-to-Text Kaggle competition](https://www.kaggle.com/competitions/brain-to-text-25). The objective of this competition is to create a model to decode intended/attempted speech in patients with ALS or other severe speech disorders using intracranial recordings of neural activity and transcriptions of phoneme and character sequences. For my submission, I implemented a muli-task learning (MTL) encoder-decoder transformer that uses a character-level language model conditioned on the neural activity to predict target phoneme and character sequences. The language model component was pre-trained using a subset of the the English OPUS (OpenSubtitles) corpus. This model was able to acheive a word error rate (WER) of 0.31 on a held-out test dataset.
+This is a repository for my submission to the [2025 Brain-to-Text Kaggle competition](https://www.kaggle.com/competitions/brain-to-text-25). The objective of this competition is to create a model to decode intended/attempted speech in patients with ALS or other severe speech disorders using intracranial recordings of neural activity and transcriptions of phoneme and character sequences. For my submission, I implemented a muli-task learning (MTL) encoder-decoder transformer that uses a character-level language model conditioned on the neural activity to predict target phoneme and character sequences. The language model component was pre-trained using a subset of the the English OPUS (OpenSubtitles) corpus.
+
+## Relative performance
+My transformer was able to acheive a word error rate (WER) of ~0.32 on a held-out test dataset. You can see how this compares to other submissions in the histogram below:
+![](data/imgs/wer_dist.png)
+This histogram shows the distribution of WER computed on a test dataset for all final submissions (1 submission per user). I clipped the WER at 1.5 for visualization, and my submission is indicated with the blue dotted vertical line. Interestingly, it seems WER is multimodally distributed with ~4 distinct peaks in density at 0.07, 0.21, 0.39, and 1.0.
  
 ## Datasets
 For convenience, I've created PyTorch Dataset objects for the Brain-to-text (B2T) (`myb2t.datasets.BrainToText2025`) and OpenSubtitles (OPUS) datasets (`myb2t.datasets.OpusDataset`). The B2T dataset stores all sequences of neural activity (multi-unit spikes and LFPs) as well as sequences of character and phoneme tokens. The OPUS dataset contains only sequences of character tokens. Below is a visualization that illustrates the data available in each dataset:
